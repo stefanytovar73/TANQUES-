@@ -136,8 +136,8 @@ function FlowTankNode({ data }) {
   const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(getNodeDisplayName({ data: nodeData }));
-  const tankWidth = Number.isFinite(Number(nodeData?.width)) ? Number(nodeData.width) : 160;
-  const tankHeight = Number.isFinite(Number(nodeData?.height)) ? Number(nodeData.height) : 200;
+  const tankWidth = (nodeData?.width != null && Number.isFinite(Number(nodeData.width)) && Number(nodeData.width) > 0) ? Number(nodeData.width) : 160;
+  const tankHeight = (nodeData?.height != null && Number.isFinite(Number(nodeData.height)) && Number(nodeData.height) > 0) ? Number(nodeData.height) : 200;
   const tankScale = Math.max(0.45, Math.min(1.4, Math.min(tankWidth / 160, tankHeight / 200) || 1));
   const innerOffsetX = (tankWidth - 160 * tankScale) / 2;
   const innerOffsetY = (tankHeight - 200 * tankScale) / 2;

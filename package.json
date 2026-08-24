@@ -1,0 +1,11 @@
+{
+  "name": "ibal-tanques-root",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev:all": "concurrently \"cd backend && php artisan serve --host=127.0.0.1 --port=8001\" \"cd frontend && npm run dev\" -k --names backend,frontend --prefix name"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.1"
+  }
+}

@@ -1,0 +1,117 @@
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+
+const apiBase = process.env.VITE_API_URL || 'http://localhost:8000/api';
+const api = axios.create({ baseURL: apiBase, timeout: 10000, headers: { 'Content-Type': 'application/json' } });
+
+const provided = require('./applyCapacitiesBatch.cjs').provided || null;
+// if not available, replicate list
+const fallback = [
+  { name: 'aurora', nivel: 2.98, capacidad: 1412, capacidadMaxima: 1600 },
+  { name: 'belen', nivel: 2.57, capacidad: 2038, capacidadMaxima: 3000 },
+  { name: 'ciudad', nivel: 1.84, capacidad: 1453, capacidadMaxima: 3000 },
+  { name: 'interlaken', nivel: 1.41, capacidad: 160, capacidadMaxima: null },
+  { name: 'ambala 1', nivel: 3.05, capacidad: 2540, capacidadMaxima: null },
+  { name: 'ambala 2', nivel: 2.88, capacidad: 2390, capacidadMaxima: null },
+  { name: 'alsacia', nivel: 0.87, capacidad: 2390, capacidadMaxima: null },
+  { name: 'calucaima', nivel: 4.11, capacidad: 82, capacidadMaxima: 100 },
+  { name: 'la quince', nivel: 4.01, capacidad: 1888, capacidadMaxima: null },
+  { name: 'miramar', nivel: 4.79, capacidad: 1277, capacidadMaxima: 2000 },
+  { name: 'zona industrial', nivel: 3.34, capacidad: 0, capacidadMaxima: 0 },
+  { name: 'piedra pintada 1', nivel: 0.61, capacidad: 142, capacidadMaxima: null },
+  { name: 'piedra pintada 2', nivel: 1.58, capacidad: 1316, capacidadMaxima: null },
+  { name: 'la 30', nivel: 1.87, capacidad: 551, capacidadMaxima: 1000 },
+  { name: 'la 29', nivel: 1.56, capacidad: 1733, capacidadMaxima: 1000 },
+  { name: 'tanque cerro 1', nivel: 2.48, capacidad: 575, capacidadMaxima: 1000 },
+  { name: 'tanque cerro 2', nivel: 1.81, capacidad: 419, capacidadMaxima: 1000 },
+  { name: 'mirolindo', nivel: 1.78, capacidad: 637, capacidadMaxima: null },
+  { name: 'picaleña 1', nivel: 1.38, capacidad: 144, capacidadMaxima: null },
+  { name: 'picaleña 2', nivel: 1.52, capacidad: 542, capacidadMaxima: null },
+];
+const providedList = provided || fallback;
+
+function normalize(s) {
+  if (!s) return '';
+  return s.toString().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim();
+}
+
+function tokenSet(s) {
+  return new Set(normalize(s).split(/\s+/).filter(Boolean));
+}
+
+async function getTanques() {
+  const res = await api.get('/tanques');
+  return res.data.tanques || [];
+}
+
+async function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
+
+(async () => {
+  try {
+    console.log('Obteniendo lista de tanques desde', apiBase);
+    const tanques = await getTanques();
+    console.log('Tanques obtenidos:', tanques.length);
+
+    let matched = 0, persisted = 0, failed = 0;
+    const failedList = [];
+
+    for (const item of providedList) {
+      const itemTokens = tokenSet(item.name);
+      let found = null;
+      for (const t of tanques) {
+        const cand = (t.nombre || t.tag || '').toString();
+        const candTokens = tokenSet(cand);
+        // direct includes
+        if (normalize(cand).includes(normalize(item.name)) || normalize(item.name).includes(normalize(cand))) {
+          found = t; break;
+        }
+        // token overlap
+        const inter = [...itemTokens].filter(x => candTokens.has(x));
+        if (inter.length >= 1) { found = t; break; }
+      }
+
+      if (!found) { console.log('No encontrado (laxo):', item.name); continue; }
+      matched++;
+
+      const areaCalculated = (item.capacidad != null && Number(item.nivel) && Number(item.nivel) > 0) ? Number(item.capacidad) / Number(item.nivel) : (found.area_m2 ?? found.area ?? null);
+
+      const payload = {
+        nombre: found.nombre,
+        valor_m: Number(item.nivel),
+        nivel_maximo: found.nivel_maximo ? Number(found.nivel_maximo) : null,
+        porcentaje: found.porcentaje ? Number(found.porcentaje) : null,
+        capacidad_actual_m3: item.capacidad != null ? Number(item.capacidad) : (found.capacidad_actual_m3 ?? found.capacidad_actual ?? null),
+        capacidad_actual: item.capacidad != null ? Number(item.capacidad) : (found.capacidad_actual ?? found.capacidad_actual_m3 ?? null),
+        capacidad_maxima_m3: item.capacidadMaxima != null ? Number(item.capacidadMaxima) : (found.capacidad_maxima_m3 ?? found.capacidad_maxima ?? null),
+        capacidad_maxima: item.capacidadMaxima != null ? Number(item.capacidadMaxima) : (found.capacidad_maxima ?? found.capacidad_maxima_m3 ?? null),
+        area_m2: areaCalculated != null ? Number(areaCalculated) : (found.area_m2 ?? found.area ?? null),
+        area: areaCalculated != null ? Number(areaCalculated) : (found.area ?? found.area_m2 ?? null),
+      };
+
+      const maxAttempts = 3; let attempt = 0; let ok = false;
+      while (attempt < maxAttempts && !ok) {
+        attempt++;
+        try {
+          if (found.id && String(found.id).match(/^\d+$/)) {
+            await api.put(`/tanques/${found.id}`, payload);
+            console.log(`Actualizado ${found.nombre} (id=${found.id})`);
+          } else {
+            await api.post('/tanques', payload);
+            console.log(`Creado/Actualizado por nombre ${found.nombre}`);
+          }
+          persisted++; ok = true;
+        } catch (err) {
+          console.error(`Intento ${attempt} falló para ${found.nombre}: ${err.message}`);
+          if (attempt < maxAttempts) await sleep(300 * attempt);
+          else { failed++; failedList.push({ nombre: found.nombre, error: err.message }); }
+        }
+      }
+    }
+
+    console.log('Resultado (laxo): encontrados=', matched, 'persistidos=', persisted, 'fallidos=', failed);
+    if (failedList.length) console.log('Fallos:', failedList);
+  } catch (err) {
+    console.error('Error ejecutando lote laxo:', err.message);
+  }
+})();

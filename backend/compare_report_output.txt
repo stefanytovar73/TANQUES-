@@ -1,0 +1,220 @@
+------------------------------------------------------------
+Nombre esperado (empresa): Aurora
+Nombre recibido desde la API: Aurora
+Alias encontrado: la aurora
+valor_m recibido: 2.91
+altura_rebose utilizada: 4.90
+Porcentaje calculado: 59.44%
+Porcentaje esperado (empresa): 78.00%
+Diferencia absoluta: 18.56%
+Resultado: ❌ CONFIGURACIÓN INCORRECTA
+Causa probable: alias
+------------------------------------------------------------
+Nombre esperado (empresa): Belén
+Nombre recibido desde la API: Belén
+Alias encontrado: belen
+valor_m recibido: 1.74
+altura_rebose utilizada: 3.81
+Porcentaje calculado: 45.71%
+Porcentaje esperado (empresa): 48.00%
+Diferencia absoluta: 2.29%
+Resultado: ✅ CONFIGURACIÓN CORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Interlaken
+Nombre recibido desde la API: Interlaken
+Alias encontrado: interlaken
+valor_m recibido: 0.89
+altura_rebose utilizada: 4.35
+Porcentaje calculado: 20.50%
+Porcentaje esperado (empresa): 17.00%
+Diferencia absoluta: 3.50%
+Resultado: ❌ CONFIGURACIÓN INCORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Ambalá 1
+Nombre recibido desde la API: Ambala 1
+Alias encontrado: ambala 1
+valor_m recibido: 2.53
+altura_rebose utilizada: 7.30
+Porcentaje calculado: 34.62%
+Porcentaje esperado (empresa): 39.00%
+Diferencia absoluta: 4.38%
+Resultado: ❌ CONFIGURACIÓN INCORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Ambalá 2
+Nombre recibido desde la API: Ambala 2
+Alias encontrado: ambala 2
+valor_m recibido: 2.13
+altura_rebose utilizada: 7.30
+Porcentaje calculado: 29.23%
+Porcentaje esperado (empresa): 33.00%
+Diferencia absoluta: 3.77%
+Resultado: ❌ CONFIGURACIÓN INCORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Alsacia
+Nombre recibido desde la API: Alsacia
+Alias encontrado: alsacia
+valor_m recibido: 0.57
+altura_rebose utilizada: 2.62
+Porcentaje calculado: 21.94%
+Porcentaje esperado (empresa): 24.00%
+Diferencia absoluta: 2.06%
+Resultado: ✅ CONFIGURACIÓN CORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Calucaima
+Nombre recibido desde la API: Calucaima
+Alias encontrado: calucaima
+valor_m recibido: 4.11
+altura_rebose utilizada: N/A
+Porcentaje calculado: N/A
+Porcentaje esperado (empresa): 82.00%
+Diferencia absoluta: N/A
+Resultado: NO SE PUDO CALCULAR
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Ciudad
+Nombre recibido desde la API: Ciudad
+Alias encontrado: ciudad
+valor_m recibido: 1.58
+altura_rebose utilizada: 3.81
+Porcentaje calculado: 41.40%
+Porcentaje esperado (empresa): N/A
+Diferencia absoluta: N/A
+Resultado: N/A
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Tanque la 15
+Nombre recibido desde la API: NO ENCONTRADO
+Alias encontrado: N/A
+valor_m recibido: N/A
+altura_rebose utilizada: N/A
+Porcentaje calculado: N/A
+Porcentaje esperado (empresa): 30.00%
+Diferencia absoluta: N/A
+Resultado: NO SE PUDO CALCULAR
+Causa probable: configuración inexistente
+------------------------------------------------------------
+Nombre esperado (empresa): Tanque la 29
+Nombre recibido desde la API: NO ENCONTRADO
+Alias encontrado: N/A
+valor_m recibido: N/A
+altura_rebose utilizada: N/A
+Porcentaje calculado: N/A
+Porcentaje esperado (empresa): 42.00%
+Diferencia absoluta: N/A
+Resultado: NO SE PUDO CALCULAR
+Causa probable: configuración inexistente
+------------------------------------------------------------
+Nombre esperado (empresa): Tanque la 30
+Nombre recibido desde la API: NO ENCONTRADO
+Alias encontrado: N/A
+valor_m recibido: N/A
+altura_rebose utilizada: N/A
+Porcentaje calculado: N/A
+Porcentaje esperado (empresa): 27.00%
+Diferencia absoluta: N/A
+Resultado: NO SE PUDO CALCULAR
+Causa probable: configuración inexistente
+------------------------------------------------------------
+Nombre esperado (empresa): Piedra Pintada 1
+Nombre recibido desde la API: Piedra Pintada 1
+Alias encontrado: piedra pintada 1
+valor_m recibido: 0.61
+altura_rebose utilizada: 4.55
+Porcentaje calculado: 13.31%
+Porcentaje esperado (empresa): 14.00%
+Diferencia absoluta: 0.69%
+Resultado: ✅ CONFIGURACIÓN CORRECTA
+Causa probable: alias
+------------------------------------------------------------
+Nombre esperado (empresa): Piedra Pintada 2
+Nombre recibido desde la API: Piedra Pintada 2
+Alias encontrado: piedra pintada 2
+valor_m recibido: 0.68
+altura_rebose utilizada: 4.15
+Porcentaje calculado: 16.37%
+Porcentaje esperado (empresa): 14.00%
+Diferencia absoluta: 2.37%
+Resultado: ✅ CONFIGURACIÓN CORRECTA
+Causa probable: alias
+------------------------------------------------------------
+Nombre esperado (empresa): Miramar
+Nombre recibido desde la API: Miramar
+Alias encontrado: miramar
+valor_m recibido: 4.79
+altura_rebose utilizada: N/A
+Porcentaje calculado: N/A
+Porcentaje esperado (empresa): 64.00%
+Diferencia absoluta: N/A
+Resultado: NO SE PUDO CALCULAR
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Zona Industrial
+Nombre recibido desde la API: De Zona Industrial
+Alias encontrado: zona industrial
+valor_m recibido: 0.78
+altura_rebose utilizada: 15.14
+Porcentaje calculado: 5.15%
+Porcentaje esperado (empresa): 5.00%
+Diferencia absoluta: 0.15%
+Resultado: ✅ CONFIGURACIÓN CORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Cerro Gordo 1
+Nombre recibido desde la API: Cerro Gordo 1
+Alias encontrado: cerro gordo 1
+valor_m recibido: 1.64
+altura_rebose utilizada: 4.06
+Porcentaje calculado: 40.47%
+Porcentaje esperado (empresa): 42.00%
+Diferencia absoluta: 1.53%
+Resultado: ✅ CONFIGURACIÓN CORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Cerro Gordo 2
+Nombre recibido desde la API: Cerro Gordo 2
+Alias encontrado: cerro gordo 2
+valor_m recibido: 1.08
+altura_rebose utilizada: 4.06
+Porcentaje calculado: 26.71%
+Porcentaje esperado (empresa): 28.00%
+Diferencia absoluta: 1.29%
+Resultado: ✅ CONFIGURACIÓN CORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Mirolindo
+Nombre recibido desde la API: Mirolindo
+Alias encontrado: mirolindo
+valor_m recibido: 1.62
+altura_rebose utilizada: 2.80
+Porcentaje calculado: 57.93%
+Porcentaje esperado (empresa): 61.00%
+Diferencia absoluta: 3.07%
+Resultado: ❌ CONFIGURACIÓN INCORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Picaleña 1
+Nombre recibido desde la API: Picaleña 1
+Alias encontrado: picalena 1
+valor_m recibido: 1.09
+altura_rebose utilizada: 3.50
+Porcentaje calculado: 31.04%
+Porcentaje esperado (empresa): 36.00%
+Diferencia absoluta: 4.96%
+Resultado: ❌ CONFIGURACIÓN INCORRECTA
+Causa probable: altura_rebose
+------------------------------------------------------------
+Nombre esperado (empresa): Picaleña 2
+Nombre recibido desde la API: Picaleña 2
+Alias encontrado: picalena 2
+valor_m recibido: 2.07
+altura_rebose utilizada: 2.67
+Porcentaje calculado: 77.46%
+Porcentaje esperado (empresa): 53.00%
+Diferencia absoluta: 24.46%
+Resultado: ❌ CONFIGURACIÓN INCORRECTA
+Causa probable: altura_rebose

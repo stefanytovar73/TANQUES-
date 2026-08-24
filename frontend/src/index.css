@@ -1,0 +1,15 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+  background: #f4f7fb !important;
+  font-family: 'Inter', Roboto, Arial, sans-serif;
+}
+
+/* Ensure main container stretches full height */
+#root > div {
+  min-height: 100%;
+  background: #f4f7fb;
+}

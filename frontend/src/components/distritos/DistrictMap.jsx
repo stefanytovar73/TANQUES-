@@ -262,28 +262,23 @@ export default function DistrictMap() {
               if (!newValue) return;
               onSelectTank(newValue.value);
             }}
-            renderInput={(params) => {
-              const { InputProps, ...restParams } = params;
-              return (
-                <TextField
-                  {...restParams}
-                  placeholder="Buscar tanque, PTAP o distrito..."
-                  size="small"
-                  sx={{ flex: 1 }}
-                  slotProps={{
-                    input: {
-                      ...InputProps,
-                      startAdornment: (
-                        <>
-                          <InputAdornment position="start"><SearchIcon /></InputAdornment>
-                          {InputProps?.startAdornment}
-                        </>
-                      ),
-                    },
-                  }}
-                />
-              );
-            }}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                placeholder="Buscar tanque, PTAP o distrito..."
+                size="small"
+                sx={{ flex: 1 }}
+                InputProps={{
+                  ...params.InputProps,
+                  startAdornment: (
+                    <>
+                      <InputAdornment position="start"><SearchIcon /></InputAdornment>
+                      {params.InputProps?.startAdornment}
+                    </>
+                  ),
+                }}
+              />
+            )}
           />
           <Box sx={{ display: 'flex', gap: 1, ml: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button size="small" variant={filterState === 'all' ? 'contained' : 'outlined'} onClick={() => setFilterState('all')}>Todos</Button>

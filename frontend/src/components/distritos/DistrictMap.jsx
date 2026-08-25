@@ -49,6 +49,29 @@ export default function DistrictMap() {
   const [deleteMode, setDeleteMode] = useState(false);
   const [showShapePicker, setShowShapePicker] = useState(false);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
+  const [connectionStrokeWidth, setConnectionStrokeWidth] = useState(3);
+  const [connectionStrokeColor, setConnectionStrokeColor] = useState('#000000');
+  const [connectionLabel, setConnectionLabel] = useState('');
+
+  useEffect(() => {
+    try {
+      if (!selectedEdgeId) { setConnectionLabel(''); return; }
+      const raw = JSON.parse(localStorage.getItem('district_state') || '{}');
+      const edges = Array.isArray(raw.edges) ? raw.edges : [];
+      const e = edges.find(x => x.id === selectedEdgeId);
+      if (e) {
+        setConnectionLabel(e.label || '');
+        const sw = (e.style && (e.style.strokeWidth || e.style.strokewidth)) || (e.strokeWidth) || 3;
+        setConnectionStrokeWidth(sw);
+        const stroke = (e.style && e.style.stroke) || e.stroke || '#000000';
+        setConnectionStrokeColor(stroke || '#000000');
+      } else {
+        setConnectionLabel('');
+        setConnectionStrokeWidth(3);
+        setConnectionStrokeColor('#000000');
+      }
+    } catch (err) { setConnectionLabel(''); setConnectionStrokeWidth(3); setConnectionStrokeColor('#000000'); }
+  }, [selectedEdgeId]);
 
 
   const catalog = useMemo(() => loadCatalog(), []);
@@ -351,16 +374,24 @@ export default function DistrictMap() {
             >
               Eliminar
             </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              color="error"
-              onClick={() => {
-                flowRef.current?.deleteSelectedConnection?.();
-              }}
-            >
-              Eliminar conexión
-            </Button>
+            <Button size="small" variant="outlined" color="error" onClick={() => { flowRef.current?.deleteSelectedConnection?.(); }}>Eliminar conexión</Button>
+
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+              <Button size="small" variant="outlined" color="secondary" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Tamaño - clicked, targetId=', tid); flowRef.current?.resizeSelectedNode?.(tid, -10, -10); }}>Tamaño -</Button>
+              <Button size="small" variant="outlined" color="secondary" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Tamaño + clicked, targetId=', tid); flowRef.current?.resizeSelectedNode?.(tid, 10, 10); }}>Tamaño +</Button>
+              <Button size="small" variant="outlined" color="warning" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Rotar left clicked, targetId=', tid); flowRef.current?.rotateSelectedNode?.(tid, 'left'); }}>↺</Button>
+              <Button size="small" variant="outlined" color="warning" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Rotar right clicked, targetId=', tid); flowRef.current?.rotateSelectedNode?.(tid, 'right'); }}>↻</Button>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', px: 1 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', marginRight: 6 }}>Conexión</div>
+              <button type="button" onClick={() => { const nextWidth = Math.max(1, Number(connectionStrokeWidth || 3) - 1); setConnectionStrokeWidth(nextWidth); flowRef.current?.updateSelectedConnectionStyle?.(selectedEdgeId, { strokeWidth: nextWidth }); }} style={{ width: 30, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer' }}>-</button>
+              <span style={{ fontSize: 11, color: '#334155', minWidth: 28, textAlign: 'center', fontWeight: 700 }}>{connectionStrokeWidth}px</span>
+              <button type="button" onClick={() => { const nextWidth = Math.min(12, Number(connectionStrokeWidth || 3) + 1); setConnectionStrokeWidth(nextWidth); flowRef.current?.updateSelectedConnectionStyle?.(selectedEdgeId, { strokeWidth: nextWidth }); }} style={{ width: 30, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer' }}>+</button>
+              <input type="color" value={connectionStrokeColor} onChange={(e) => { const next = e.target.value; setConnectionStrokeColor(next); flowRef.current?.updateSelectedConnectionStyle?.(selectedEdgeId, { stroke: next, strokeWidth: connectionStrokeWidth || 3 }); }} style={{ width: 34, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', padding: 0 }} />
+              <input type="text" placeholder="Etiqueta" value={connectionLabel} onChange={(e) => setConnectionLabel(e.target.value)} style={{ width: 120, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', padding: '4px 8px' }} />
+              <Button size="small" onClick={() => { flowRef.current?.updateSelectedEdgeLabel?.(selectedEdgeId, connectionLabel); }}>Guardar etiqueta</Button>
+            </Box>
 
             {/* Selector de color */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, px: 1, py: 0.4, borderRadius: 1, background: '#fff', border: '1px solid #cbd5e1' }}>

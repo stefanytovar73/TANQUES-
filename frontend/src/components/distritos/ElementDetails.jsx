@@ -38,7 +38,7 @@ export default function ElementDetails({ open, onClose, node, onShowConnections,
         <Divider sx={{ my: 2 }} />
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Nivel</Typography>
-        <Typography sx={{ mb: 1 }}>{data.valor_m != null ? `${data.valor_m} m` : 'N/D'}</Typography>
+        <Typography sx={{ mb: 1 }}>{data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'N/D'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Última lectura</Typography>
         <Typography sx={{ mb: 1 }}>{data.fecha_hora || data.fecha || data.timestamp || data.ultimo_update || data.last_update || 'N/D'}</Typography>

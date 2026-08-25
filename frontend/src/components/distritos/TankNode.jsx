@@ -21,21 +21,21 @@ export default function TankNode({ data, selected }) {
     <g>
       {/* ── badge nivel ENCIMA ── */}
       <rect
-        x={cx - 36} y={0} width={72} height={24}
-        rx={5}
+        x={cx - 46} y={-2} width={92} height={30}
+        rx={6}
         fill="#ffffff"
         stroke="#94a3b8"
-        strokeWidth={1}
-        style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))' }}
+        strokeWidth={1.2}
+        style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.18))' }}
       />
       <text
-        x={cx} y={12}
+        x={cx} y={14}
         fontFamily="Roboto, Arial, sans-serif"
-        fontSize={12} fontWeight={800}
+        fontSize={16} fontWeight={900}
         fill="#0b2447"
         textAnchor="middle" dominantBaseline="middle"
       >
-        {data.valor_m != null ? `${data.valor_m} m` : 'N/D'}
+        {data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'N/D'}
       </text>
 
       {/* ── cuerpo del tanque ── */}

@@ -6,15 +6,15 @@ export default function TanqueVisual({ porcentaje }) {
     const showInside = porcentajeValue >= 8; // threshold to render text inside water
 
     return (
-        <Box sx={{ width: 156, height: 188, position: "relative", display: "grid", placeItems: "center" }}>
+        <Box sx={{ width: 180, height: 214, position: "relative", display: "grid", placeItems: "center" }}>
             <Box
                 sx={{
                     position: "absolute",
                     top: 0,
                     left: "50%",
                     transform: "translateX(-50%)",
-                    width: 156,
-                    height: 18,
+                    width: 180,
+                    height: 20,
                     borderRadius: "12px",
                     background: "linear-gradient(180deg, #E3E7EB 0%, #AAB4BC 100%)",
                     border: "1px solid rgba(112,120,128,0.26)",
@@ -25,12 +25,12 @@ export default function TanqueVisual({ porcentaje }) {
             <Box
                 sx={{
                     position: "absolute",
-                    top: 12,
+                    top: 14,
                     left: "50%",
                     transform: "translateX(-50%)",
-                    width: 146,
-                    height: 156,
-                    borderRadius: "18px",
+                    width: 168,
+                    height: 178,
+                    borderRadius: "20px",
                     border: "2px solid rgba(112,120,128,0.4)",
                     background: "rgba(250,252,255,0.92)",
                     boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.8), inset 0 18px 28px rgba(255,255,255,0.55), 0 10px 26px rgba(15,23,42,0.06)",
@@ -148,7 +148,7 @@ export default function TanqueVisual({ porcentaje }) {
                         transform: 'translate(-50%, -50%)',
                         width: '100%',
                         textAlign: 'center',
-                        fontSize: 18,
+                        fontSize: 20,
                         fontWeight: 900,
                         color: showInside ? '#FFFFFF' : '#0F2A55',
                         textShadow: showInside ? '0 0 12px rgba(0,0,0,0.18)' : 'none',
@@ -166,8 +166,8 @@ export default function TanqueVisual({ porcentaje }) {
                     bottom: 0,
                     left: "50%",
                     transform: "translateX(-50%)",
-                    width: 156,
-                    height: 18,
+                    width: 180,
+                    height: 20,
                     borderRadius: "12px",
                     background: "linear-gradient(180deg, #BDC6D0 0%, #E8EDF4 100%)",
                     border: "1px solid rgba(112,120,128,0.22)",

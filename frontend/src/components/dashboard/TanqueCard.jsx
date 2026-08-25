@@ -71,7 +71,7 @@ function TanqueCard({ tanque }) {
                     <Typography sx={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: "Inter, sans-serif" }}>
                         Nivel actual
                     </Typography>
-                    <Typography sx={{ fontSize: 28, fontWeight: 900, color: "#0F2A55", fontFamily: "Inter, sans-serif" }}>
+                    <Typography sx={{ fontSize: 32, fontWeight: 900, color: "#0F2A55", fontFamily: "Inter, sans-serif" }}>
                         {Number.isFinite(Number(nivel)) ? `${Number(nivel).toFixed(2)} m` : "--"}
                     </Typography>
                 </Box>

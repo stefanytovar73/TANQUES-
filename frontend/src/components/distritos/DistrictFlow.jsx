@@ -84,6 +84,7 @@ function ensureNodeData(node) {
   const customName = source.customName || node?.customName || source.diagramName || source.displayName || '';
   const widthValue = source.width != null ? toFiniteNumber(source.width, 170) : (node?.width != null ? toFiniteNumber(node.width, 170) : null);
   const heightValue = source.height != null ? toFiniteNumber(source.height, 100) : (node?.height != null ? toFiniteNumber(node.height, 100) : null);
+  const rotationValue = source.rotation != null ? toFiniteNumber(source.rotation, 0) : (node?.rotation != null ? toFiniteNumber(node.rotation, 0) : 0);
   const enrichedSource = resolvedType === 'tank' ? enrichTankNodeMetrics(source) : source;
   return {
     ...enrichedSource,
@@ -98,6 +99,7 @@ function ensureNodeData(node) {
     shapeType: source.shapeType || 'box',
     width: widthValue,
     height: heightValue,
+    rotation: rotationValue,
     position: sanitizePosition(node?.position || source.position),
   };
 }
@@ -141,6 +143,7 @@ function FlowTankNode({ data }) {
   const tankScale = Math.max(0.45, Math.min(1.4, Math.min(tankWidth / 160, tankHeight / 200) || 1));
   const innerOffsetX = (tankWidth - 160 * tankScale) / 2;
   const innerOffsetY = (tankHeight - 200 * tankScale) / 2;
+  const rotation = (nodeData?.rotation != null && Number.isFinite(Number(nodeData.rotation))) ? Number(nodeData.rotation) : 0;
 
   useEffect(() => {
     setDraft(getNodeDisplayName({ data: nodeData }));
@@ -189,7 +192,7 @@ function FlowTankNode({ data }) {
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
       {/* Handles — solo visibles en editMode */}
       <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: tankWidth * 0.2, top: tankHeight / 2 }} />
       <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, right: tankWidth * 0.2, top: tankHeight / 2 }} />
@@ -277,6 +280,7 @@ function FlowPlantNode({ data }) {
   };
   const isPending = Boolean(data && data.pendingConnect);
   const labelText = getNodeDisplayName({ data: nodeData });
+  const rotation = (nodeData?.rotation != null && Number.isFinite(Number(nodeData.rotation))) ? Number(nodeData.rotation) : 0;
   const beginEdit = (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -303,7 +307,7 @@ function FlowPlantNode({ data }) {
   };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: 6, top: 40 }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, right: 6, top: 40 }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, top: 14, left: 100 }} />
@@ -416,6 +420,7 @@ function FlowDistrictNode({ data }) {
   };
   const isPending = Boolean(data && data.pendingConnect);
   const labelText = getNodeDisplayName({ data: nodeData });
+  const rotation = (nodeData?.rotation != null && Number.isFinite(Number(nodeData.rotation))) ? Number(nodeData.rotation) : 0;
 
   const beginEdit = (ev) => {
     ev.preventDefault();
@@ -443,7 +448,7 @@ function FlowDistrictNode({ data }) {
   };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: 6, top: 24 }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, right: 6, top: 24 }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, top: 4, left: 80 }} />
@@ -538,6 +543,7 @@ function FlowShapeNode({ data }) {
   const width = Number.isFinite(Number(nodeData?.width)) ? Number(nodeData.width) : Number.isFinite(Number(baseSize.width)) ? Number(baseSize.width) : 120;
   const height = Number.isFinite(Number(nodeData?.height)) ? Number(nodeData.height) : Number.isFinite(Number(baseSize.height)) ? Number(baseSize.height) : 68;
   const shapeType = nodeData?.shapeType || 'rect';
+  const rotation = (nodeData?.rotation != null && Number.isFinite(Number(nodeData.rotation))) ? Number(nodeData.rotation) : 0;
 
   useEffect(() => {
     setDraft(nodeData?.label || nodeData?.customName || 'Texto / Forma');
@@ -616,7 +622,7 @@ function FlowShapeNode({ data }) {
   };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={handleStyle} />
       <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
       <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
@@ -761,6 +767,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       shapeType: source.shapeType || prev.shapeType || 'box',
       width: safeWidth,
       height: safeHeight,
+      rotation: source.rotation != null ? toFiniteNumber(source.rotation, 0) : (prev.rotation != null ? toFiniteNumber(prev.rotation, 0) : 0),
       valor_m: source.valor_m ?? prev.valor_m ?? null,
       altura_rebose_calibrada: source.altura_rebose_calibrada ?? prev.altura_rebose_calibrada ?? null,
       altura_rebose: source.altura_rebose ?? prev.altura_rebose ?? null,
@@ -899,6 +906,100 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       return updated;
     });
   }, [selectedNodeId, persistDistrictState]);
+
+  const resizeSelectedNode = useCallback((targetId, dw, dh) => {
+    const id = targetId || selectedNodeId;
+    if (!id) return;
+    setNodes((nds) => {
+      const updated = nds.map(n => {
+        if (n.id !== id) return n;
+        const sourceData = (n.data && n.data.nodeData) || (n.data || {});
+        const currentW = Number.isFinite(Number(sourceData.width)) && Number(sourceData.width) > 0 ? Number(sourceData.width) : (n.type === 'tank' ? 160 : (n.type === 'plant' ? 200 : 120));
+        const currentH = Number.isFinite(Number(sourceData.height)) && Number(sourceData.height) > 0 ? Number(sourceData.height) : (n.type === 'tank' ? 200 : (n.type === 'plant' ? 80 : 68));
+        const nextW = Math.max(40, Math.min(500, currentW + (Number(dw) || 0)));
+        const nextH = Math.max(40, Math.min(500, currentH + (Number(dh) || 0)));
+        const nextNodeData = { ...sourceData, width: nextW, height: nextH };
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            width: nextW,
+            height: nextH,
+            nodeData: nextNodeData,
+          },
+        };
+      });
+      nodesRef.current = updated;
+      persistDistrictState(updated, edgesRef.current);
+      return updated;
+    });
+  }, [selectedNodeId, persistDistrictState]);
+
+  const rotateSelectedNode = useCallback((targetId, direction) => {
+    const id = targetId || selectedNodeId;
+    if (!id) return;
+    setNodes((nds) => {
+      const updated = nds.map(n => {
+        if (n.id !== id) return n;
+        const sourceData = (n.data && n.data.nodeData) || (n.data || {});
+        const currentRotation = Number.isFinite(Number(sourceData.rotation)) ? Number(sourceData.rotation) : 0;
+        const delta = direction === 'left' ? -90 : 90;
+        const nextRotation = ((currentRotation + delta) % 360 + 360) % 360;
+        const nextNodeData = { ...sourceData, rotation: nextRotation };
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            rotation: nextRotation,
+            nodeData: nextNodeData,
+          },
+        };
+      });
+      nodesRef.current = updated;
+      persistDistrictState(updated, edgesRef.current);
+      return updated;
+    });
+  }, [selectedNodeId, persistDistrictState]);
+
+  const updateSelectedConnectionStyle = useCallback((edgeId, style) => {
+    const id = edgeId || selectedEdgeId;
+    if (!id || !style) return;
+    setEdges((eds) => {
+      const updated = eds.map(e => {
+        if (e.id !== id) return e;
+        const currentStyle = e.style || {};
+        const nextStyle = {
+          ...currentStyle,
+          ...(style.strokeWidth != null ? { strokeWidth: Number(style.strokeWidth) } : {}),
+          ...(style.stroke != null ? { stroke: style.stroke } : {}),
+          strokeLinecap: 'round',
+        };
+        return { ...e, style: nextStyle };
+      });
+      edgesRef.current = updated;
+      try {
+        const saved = readDiagramState();
+        saved.edges = updated;
+        writeDiagramState(saved);
+      } catch (e) {}
+      return updated;
+    });
+  }, [selectedEdgeId, readDiagramState, writeDiagramState]);
+
+  const updateSelectedEdgeLabel = useCallback((edgeId, label) => {
+    const id = edgeId || selectedEdgeId;
+    if (!id) return;
+    setEdges((eds) => {
+      const updated = eds.map(e => e.id === id ? { ...e, label: label || '' } : e);
+      edgesRef.current = updated;
+      try {
+        const saved = readDiagramState();
+        saved.edges = updated;
+        writeDiagramState(saved);
+      } catch (e) {}
+      return updated;
+    });
+  }, [selectedEdgeId, readDiagramState, writeDiagramState]);
 
   const persistConnection = useCallback((nextEdges) => {
     try {
@@ -1598,6 +1699,9 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               label: resolvedLabel,
               originalName,
               apiName: ((rn.data && rn.data.nodeData && rn.data.nodeData.apiName) || (rn.data && rn.data.apiName) || originalName),
+              rotation: savedEntry && typeof savedEntry === 'object' && savedEntry.rotation != null ? toFiniteNumber(savedEntry.rotation, 0) : ((rn.data && rn.data.nodeData && rn.data.nodeData.rotation) || 0),
+              width: savedEntry && typeof savedEntry === 'object' && savedEntry.width != null ? toFiniteNumber(savedEntry.width, null) : ((rn.data && rn.data.nodeData && rn.data.nodeData.width) || null),
+              height: savedEntry && typeof savedEntry === 'object' && savedEntry.height != null ? toFiniteNumber(savedEntry.height, null) : ((rn.data && rn.data.nodeData && rn.data.nodeData.height) || null),
             },
           },
         };
@@ -1892,11 +1996,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     changeSelectedNodeColor,
     duplicateSelectedNode,
     deleteSelectedNode,
+    resizeSelectedNode,
+    rotateSelectedNode,
+    updateSelectedConnectionStyle,
+    updateSelectedEdgeLabel,
     getSelectedNodeId: () => selectedNodeId,
     getSelectedEdgeId: () => selectedEdgeId,
     getShowFlow: () => showFlow,
     deleteSelectedConnection,
-  }), [doAutoLayout, doSave, doRestoreInitial, doViewAll, doUndo, doRedo, toggleShowFlow, addDiagramNode, addShapeNode, changeSelectedNodeColor, duplicateSelectedNode, deleteSelectedNode, selectedNodeId, selectedEdgeId, showFlow, deleteSelectedConnection]);
+  }), [doAutoLayout, doSave, doRestoreInitial, doViewAll, doUndo, doRedo, toggleShowFlow, addDiagramNode, addShapeNode, changeSelectedNodeColor, duplicateSelectedNode, deleteSelectedNode, resizeSelectedNode, rotateSelectedNode, updateSelectedConnectionStyle, updateSelectedEdgeLabel, selectedNodeId, selectedEdgeId, showFlow, deleteSelectedConnection]);
 
 
   return (

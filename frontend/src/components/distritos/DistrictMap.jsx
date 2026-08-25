@@ -1,5 +1,5 @@
 import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
-import { Box, Paper, TextField, InputAdornment, IconButton, Autocomplete, Button, OutlinedInput } from '@mui/material';
+import { Box, Paper, TextField, InputAdornment, IconButton, Autocomplete, Button, OutlinedInput, Snackbar } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import debounce from '../../utils/debounce';
 import { loadCatalog, mergeApiTanquesWithCatalog, calculateDisplayPorcentaje, normalizeText, findCatalogEntry } from '../../config/tankCatalog';
@@ -52,6 +52,7 @@ export default function DistrictMap() {
   const [connectionStrokeWidth, setConnectionStrokeWidth] = useState(3);
   const [connectionStrokeColor, setConnectionStrokeColor] = useState('#000000');
   const [connectionLabel, setConnectionLabel] = useState('');
+  const [snack, setSnack] = useState({ open: false, msg: '' });
 
   useEffect(() => {
     try {
@@ -377,10 +378,10 @@ export default function DistrictMap() {
             <Button size="small" variant="outlined" color="error" onClick={() => { flowRef.current?.deleteSelectedConnection?.(); }}>Eliminar conexión</Button>
 
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-              <Button size="small" variant="outlined" color="secondary" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Tamaño - clicked, targetId=', tid); flowRef.current?.resizeSelectedNode?.(tid, -10, -10); }}>Tamaño -</Button>
-              <Button size="small" variant="outlined" color="secondary" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Tamaño + clicked, targetId=', tid); flowRef.current?.resizeSelectedNode?.(tid, 10, 10); }}>Tamaño +</Button>
-              <Button size="small" variant="outlined" color="warning" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Rotar left clicked, targetId=', tid); flowRef.current?.rotateSelectedNode?.(tid, 'left'); }}>↺</Button>
-              <Button size="small" variant="outlined" color="warning" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Rotar right clicked, targetId=', tid); flowRef.current?.rotateSelectedNode?.(tid, 'right'); }}>↻</Button>
+              <Button size="small" variant="outlined" color="secondary" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Tamaño - clicked, targetId=', tid); flowRef.current?.resizeSelectedNode?.(tid, -10, -10); setSnack({ open: true, msg: 'Tamaño - aplicado' }); }}>Tamaño -</Button>
+              <Button size="small" variant="outlined" color="secondary" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Tamaño + clicked, targetId=', tid); flowRef.current?.resizeSelectedNode?.(tid, 10, 10); setSnack({ open: true, msg: 'Tamaño + aplicado' }); }}>Tamaño +</Button>
+              <Button size="small" variant="outlined" color="warning" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Rotar left clicked, targetId=', tid); flowRef.current?.rotateSelectedNode?.(tid, 'left'); setSnack({ open: true, msg: 'Rotado -90°' }); }}>↺</Button>
+              <Button size="small" variant="outlined" color="warning" onClick={() => { setDeleteMode(false); const tid = selectedId || flowRef.current?.getSelectedNodeId?.(); console.debug('Rotar right clicked, targetId=', tid); flowRef.current?.rotateSelectedNode?.(tid, 'right'); setSnack({ open: true, msg: 'Rotado +90°' }); }}>↻</Button>
             </Box>
 
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', px: 1 }}>
@@ -455,6 +456,14 @@ export default function DistrictMap() {
           ) : null}
         </Box>
       </Paper>
+
+      <Snackbar
+        open={snack.open}
+        message={snack.msg}
+        autoHideDuration={1400}
+        onClose={() => setSnack({ open: false, msg: '' })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
 
       <ElementDetails open={!editMode && !!selectedNode} onClose={() => { setSelectedId(null); setShowConnections(false); }} node={selectedNode || null} nodes={nodes} connections={resolvedConnections} onShowConnections={() => {
         if (!selectedNode) return;

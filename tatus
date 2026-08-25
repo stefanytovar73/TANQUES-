@@ -1,0 +1,16 @@
+[33m8ab0bee[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m HEAD@{Tue Aug 25 12:04:54 2026}: checkout: moving from 5960a8dbe658e1e3eb802604a6d443dbee4b7212 to main
+[33m5960a8d[m HEAD@{Tue Aug 25 12:03:41 2026}: checkout: moving from main to 5960a8d
+[33m8ab0bee[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m HEAD@{Tue Aug 25 12:03:37 2026}: checkout: moving from 5960a8dbe658e1e3eb802604a6d443dbee4b7212 to main
+[33m5960a8d[m HEAD@{Tue Aug 25 12:03:04 2026}: checkout: moving from main to 5960a8d
+[33m8ab0bee[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m HEAD@{Tue Aug 25 11:32:33 2026}: reset: moving to HEAD
+[33m8ab0bee[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m refs/remotes/origin/main@{Tue Aug 25 08:30:18 2026}: update by push
+[33m8ab0bee[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m refs/heads/main@{Tue Aug 25 08:30:00 2026}: commit: Ajustes en visualización y configuración de tanques
+[33m8ab0bee[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m HEAD@{Tue Aug 25 08:30:00 2026}: commit: Ajustes en visualización y configuración de tanques
+[33m5960a8d[m refs/remotes/origin/main@{Mon Aug 24 16:36:55 2026}: update by push
+[33m5960a8d[m refs/heads/main@{Mon Aug 24 16:36:45 2026}: commit: Actualiza editor y funcionalidades de tanques
+[33m5960a8d[m HEAD@{Mon Aug 24 16:36:45 2026}: commit: Actualiza editor y funcionalidades de tanques
+[33m6241426[m refs/remotes/origin/main@{Mon Aug 24 16:20:24 2026}: update by push
+[33m6241426[m refs/heads/main@{Mon Aug 24 16:20:11 2026}: Branch: renamed refs/heads/master to refs/heads/main
+[33m6241426[m HEAD@{Mon Aug 24 16:20:11 2026}: Branch: renamed refs/heads/master to refs/heads/main
+[33m6241426[m refs/heads/main@{Mon Aug 24 16:19:52 2026}: commit (initial): Primera versión del proyecto de tanques
+[33m6241426[m HEAD@{Mon Aug 24 16:19:52 2026}: commit (initial): Primera versión del proyecto de tanques

@@ -7,6 +7,53 @@ import TankNode from './TankNode';
 import { NODES as STATIC_NODES } from './districtLayout';
 import { calculateDisplayPorcentaje } from '../../config/tankCatalog';
 import { isValidSavedEdge, normalizeSavedEdge } from './edgeUtils';
+import tanqueService from '../../services/tanqueService';
+
+// ── Caudales dinámicos: COMBEIMA 1, COMBEIMA 2, CAY ──────────────────────────
+// Mapeo label (normalizado a mayúsculas) → { tag, servicio }
+const CAUDAL_NODE_CONFIG = {
+  'COMBEIMA 1': { tag: 'CAPTACION_CAUDAL_SALIDA_24', service: 'captacion' },
+  'COMBEIMA 2': { tag: 'CAPTACION_CAUDAL_SALIDA_27', service: 'captacion' },
+  'CAY':        { tag: 'PTAP_CAUDAL_CAY_16',         service: 'ptap'      },
+};
+
+// Cache compartida a nivel de módulo: { [tag]: { valor, unidad, sin_datos } }
+// Evita múltiples llamadas HTTP cuando hay varias instancias de FlowDistrictNode.
+let _caudalMap = null;
+const _caudalListeners = new Set();
+
+function _notifyCaudalListeners(map) {
+  _caudalMap = map;
+  _caudalListeners.forEach((fn) => fn(map));
+}
+
+async function _loadCaudales() {
+  try {
+    const [captacion, ptap] = await Promise.all([
+      tanqueService.getCaptacion(),
+      tanqueService.getPtap(),
+    ]);
+    const map = {};
+    for (const v of (captacion?.variables || [])) map[v.tag] = v;
+    for (const v of (ptap?.variables || []))      map[v.tag] = v;
+    _notifyCaudalListeners(map);
+  } catch (_) { /* silencioso — no rompe el diagrama */ }
+}
+
+let _caudalPollingStarted = false;
+function _ensureCaudalPolling() {
+  if (_caudalPollingStarted) return;
+  _caudalPollingStarted = true;
+  _loadCaudales();                         // primera carga inmediata
+  setInterval(_loadCaudales, 60000);       // refresco cada 60 s (igual que useTanques)
+}
+
+function _formatCaudalValor(valor) {
+  const n = Number(valor);
+  if (!Number.isFinite(n)) return String(valor);
+  return n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 const dagreGraph = new dagre.graphlib.Graph();
 dagreGraph.setDefaultEdgeLabel(() => ({}));
@@ -200,7 +247,7 @@ function FlowTankNode({ data }) {
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, bottom: tankHeight * 0.12, left: tankWidth / 2 }} />
 
       <div style={{ width: tankWidth, height: tankHeight, overflow: 'visible' }}>
-        <svg width={tankWidth} height={tankHeight}>
+        <svg width={tankWidth} height={tankHeight} overflow="visible">
           <g transform={`translate(${innerOffsetX}, ${innerOffsetY}) scale(${tankScale})`}>
             <TankNode data={nodeData} selected={data?.selected || isPending} />
           </g>
@@ -236,10 +283,11 @@ function FlowTankNode({ data }) {
             </foreignObject>
           ) : (
             <text
-              x={80} y={168}
-              fontSize={12} fontWeight={700}
+              x={tankWidth / 2 - 20} y={innerOffsetY + 135 * tankScale + 8}
+              fontSize={13} fontWeight={700}
               fill="#0b2447"
               textAnchor="middle"
+              dominantBaseline="hanging"
               onClick={beginEdit} onDoubleClick={beginEdit}
               style={{ cursor: 'pointer' }}
             >{labelText}</text>
@@ -256,6 +304,15 @@ function FlowPlantNode({ data }) {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(getNodeDisplayName({ data: nodeData }));
   const customColor = nodeData?.customColor || nodeData?.color;
+
+  // ── Caudal dinámico ───────────────────────────────────────────────────────
+  const [caudalMap, setCaudalMap] = useState(_caudalMap);
+  useEffect(() => {
+    _ensureCaudalPolling();
+    _caudalListeners.add(setCaudalMap);
+    return () => { _caudalListeners.delete(setCaudalMap); };
+  }, []);
+  // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     setDraft(getNodeDisplayName({ data: nodeData }));
@@ -306,16 +363,22 @@ function FlowPlantNode({ data }) {
     zIndex: 10,
   };
 
+  // Caudal
+  const caudalConfig = CAUDAL_NODE_CONFIG[labelText.trim().toUpperCase()] || CAUDAL_NODE_CONFIG[labelText.trim()];
+  const caudalEntry = caudalConfig && caudalMap ? caudalMap[caudalConfig.tag] : null;
+  const caudalValor = caudalEntry != null ? caudalEntry.valor : null;
+  const caudalUnidad = caudalEntry?.unidad || 'L/s';
+
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
-      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: 6, top: 40 }} />
-      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, right: 6, top: 40 }} />
+    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 200, height: 104, position: 'relative', cursor: 'pointer', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
+      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: 6, top: 64 }} />
+      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, right: 6, top: 64 }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, top: 14, left: 100 }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, bottom: 14, left: 100 }} />
 
-      <div style={{ width: 200, height: 80, overflow: 'visible' }}>
-        <svg width={200} height={80}>
-          <g transform={`translate(${100}, ${40})`}>
+      <div style={{ width: 200, height: 104, overflow: 'visible' }}>
+        <svg width={200} height={104} overflow="visible">
+          <g transform={`translate(${100}, ${64})`}>
             {isEditing ? (
               <foreignObject x={-80} y={-18} width={160} height={42}>
                 <div className="nodrag" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -382,6 +445,30 @@ function FlowPlantNode({ data }) {
               <>
                 <rect x={-90} y={-22} width={180} height={44} rx={22} ry={22} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}22` : '#e6f2ff')} stroke={isPending ? '#ef4444' : (customColor || '#073B70')} strokeWidth={isPending || data?.selected ? 3 : 2} />
                 <text x={0} y={6} fontFamily="Roboto, Arial" fontSize={13} fontWeight={800} fill={isPending ? '#b91c1c' : (customColor || '#073B70')} textAnchor="middle" onClick={beginEdit} onDoubleClick={beginEdit} style={{ cursor: 'pointer' }}>{labelText}</text>
+                {/* Badge caudal encima del nodo — mismo patrón que TankNode */}
+                {caudalValor != null && (
+                  <>
+                    <rect
+                      x={-38} y={-46} width={76} height={22}
+                      rx={5}
+                      fill="#ffffff"
+                      stroke="#94a3b8"
+                      strokeWidth={1.2}
+                      style={{ filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.18))', pointerEvents: 'none' }}
+                    />
+                    <text
+                      x={0} y={-35}
+                      fontFamily="Roboto, Arial, sans-serif"
+                      fontSize={11} fontWeight={800}
+                      fill="#0b2447"
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      style={{ pointerEvents: 'none' }}
+                    >
+                      {_formatCaudalValor(caudalValor)} {caudalUnidad}
+                    </text>
+                  </>
+                )}
               </>
             )}
           </g>
@@ -391,11 +478,21 @@ function FlowPlantNode({ data }) {
   );
 }
 
+
 function FlowDistrictNode({ data }) {
   const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(getNodeDisplayName({ data: nodeData }));
   const customColor = nodeData?.customColor || nodeData?.color;
+
+  // ── Caudal dinámico ───────────────────────────────────────────────────────
+  const [caudalMap, setCaudalMap] = useState(_caudalMap);
+  useEffect(() => {
+    _ensureCaudalPolling();
+    _caudalListeners.add(setCaudalMap);
+    return () => { _caudalListeners.delete(setCaudalMap); };
+  }, []);
+  // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     setDraft(getNodeDisplayName({ data: nodeData }));
@@ -448,15 +545,15 @@ function FlowDistrictNode({ data }) {
   };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
-      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: 6, top: 24 }} />
-      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, right: 6, top: 24 }} />
+    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 160, height: 72, position: 'relative', cursor: 'pointer', transform: rotation ? `rotate(${rotation}deg)` : undefined, transformOrigin: 'center center' }}>
+      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: 6, top: 48 }} />
+      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, right: 6, top: 48 }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, top: 4, left: 80 }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, bottom: 4, left: 80 }} />
 
-      <div style={{ width: 160, height: 48, overflow: 'visible' }}>
-        <svg width={160} height={48}>
-          <g transform={`translate(${80}, ${24})`}>
+      <div style={{ width: 160, height: 72, overflow: 'visible' }}>
+        <svg width={160} height={72} overflow="visible">
+          <g transform={`translate(${80}, ${48})`}>
             {isEditing ? (
               <foreignObject x={-55} y={-12} width={110} height={26}>
                 <div className="nodrag" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -519,12 +616,44 @@ function FlowDistrictNode({ data }) {
                   </button>
                 </div>
               </foreignObject>
-            ) : (
-              <>
-                <rect rx={6} ry={6} x={-70} y={-17} width={140} height={34} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}18` : '#fff')} stroke={isPending ? '#ef4444' : (customColor || (data?.selected ? '#2563eb' : '#6b7280'))} strokeWidth={isPending || data?.selected ? 2.5 : 1} />
-                <text x={0} y={5} fontFamily="Roboto, Arial" fontSize={12} fill={isPending ? '#b91c1c' : (customColor || '#475569')} fontWeight={700} textAnchor="middle" onClick={beginEdit} onDoubleClick={beginEdit} style={{ cursor: 'pointer' }}>{labelText}</text>
-              </>
-            )}
+            ) : (() => {
+              // Caudal dinámico: buscar configuración por label normalizado
+              const caudalConfig = CAUDAL_NODE_CONFIG[labelText.trim().toUpperCase()] || CAUDAL_NODE_CONFIG[labelText.trim()];
+              const caudalEntry = caudalConfig && caudalMap ? caudalMap[caudalConfig.tag] : null;
+              const caudalValor = caudalEntry != null ? caudalEntry.valor : null;
+              const caudalUnidad = caudalEntry?.unidad || 'L/s';
+              return (
+                <>
+                  {/* Rect principal del nodo */}
+                  <rect rx={6} ry={6} x={-70} y={-17} width={140} height={34} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}18` : '#fff')} stroke={isPending ? '#ef4444' : (customColor || (data?.selected ? '#2563eb' : '#6b7280'))} strokeWidth={isPending || data?.selected ? 2.5 : 1} />
+                  <text x={0} y={5} fontFamily="Roboto, Arial" fontSize={12} fill={isPending ? '#b91c1c' : (customColor || '#475569')} fontWeight={700} textAnchor="middle" onClick={beginEdit} onDoubleClick={beginEdit} style={{ cursor: 'pointer' }}>{labelText}</text>
+                  {/* Badge caudal dinámico encima del nodo — mismo patrón que TankNode */}
+                  {caudalValor != null && (
+                    <>
+                      <rect
+                        x={-38} y={-42} width={76} height={22}
+                        rx={5}
+                        fill="#ffffff"
+                        stroke="#94a3b8"
+                        strokeWidth={1.2}
+                        style={{ filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.18))', pointerEvents: 'none' }}
+                      />
+                      <text
+                        x={0} y={-31}
+                        fontFamily="Roboto, Arial, sans-serif"
+                        fontSize={11} fontWeight={800}
+                        fill="#0b2447"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        style={{ pointerEvents: 'none' }}
+                      >
+                        {_formatCaudalValor(caudalValor)} {caudalUnidad}
+                      </text>
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </g>
         </svg>
       </div>
@@ -544,6 +673,19 @@ function FlowShapeNode({ data }) {
   const height = Number.isFinite(Number(nodeData?.height)) ? Number(nodeData.height) : Number.isFinite(Number(baseSize.height)) ? Number(baseSize.height) : 68;
   const shapeType = nodeData?.shapeType || 'rect';
   const rotation = (nodeData?.rotation != null && Number.isFinite(Number(nodeData.rotation))) ? Number(nodeData.rotation) : 0;
+
+  // ── Caudal dinámico ───────────────────────────────────────────────────────
+  const [caudalMap, setCaudalMap] = useState(_caudalMap);
+  useEffect(() => {
+    _ensureCaudalPolling();
+    _caudalListeners.add(setCaudalMap);
+    return () => { _caudalListeners.delete(setCaudalMap); };
+  }, []);
+  const caudalConfig = CAUDAL_NODE_CONFIG[(draft || '').trim().toUpperCase()] || CAUDAL_NODE_CONFIG[(draft || '').trim()];
+  const caudalEntry = caudalConfig && caudalMap ? caudalMap[caudalConfig.tag] : null;
+  const caudalValor = caudalEntry != null ? caudalEntry.valor : null;
+  const caudalUnidad = caudalEntry?.unidad || 'L/s';
+  // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     setDraft(nodeData?.label || nodeData?.customName || 'Texto / Forma');
@@ -629,6 +771,28 @@ function FlowShapeNode({ data }) {
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={handleStyle} />
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>{renderShape()}</svg>
       {isPending && (<div style={{ position: 'absolute', top: -14, left: '50%', transform: 'translateX(-50%)', background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 900, padding: '1px 6px', borderRadius: 4 }}>ORIGEN</div>)}
+      {/* Badge caudal encima del nodo — solo si hay valor */}
+      {!isEditing && caudalValor != null && (
+        <div style={{
+          position: 'absolute',
+          top: -28,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#ffffff',
+          border: '1.2px solid #94a3b8',
+          borderRadius: 5,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+          padding: '2px 8px',
+          fontSize: 11,
+          fontWeight: 800,
+          color: '#0b2447',
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+          fontFamily: 'Roboto, Arial, sans-serif',
+        }}>
+          {_formatCaudalValor(caudalValor)} {caudalUnidad}
+        </div>
+      )}
       {isEditing ? (
         <div className="nodrag" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: width - 20, display: 'flex', flexDirection: 'column', gap: 4, zIndex: 10 }}>
           <textarea autoFocus value={draft} onChange={e => setDraft(e.target.value)}
@@ -646,6 +810,7 @@ function FlowShapeNode({ data }) {
   );
 }
 
+
 // Node types defined at module scope to avoid recreating object on each render
 const NODE_TYPES = { tank: FlowTankNode, plant: FlowPlantNode, district: FlowDistrictNode, shape: FlowShapeNode };
 
@@ -658,13 +823,20 @@ function formatDateLabel(isoDate, fmt = 'dd/MM/yyyy') {
   } catch (e) { return isoDate || ''; }
 }
 
-const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [], initialEdges = [], onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all' }, ref) {
+const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [], initialEdges = [], onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', edgeLineType = 'straight' }, ref) {
 
   // Note: avoid updateNodeDimensions to prevent React Flow from hiding nodes while measuring
   try { console.debug('[DISTRICT DEBUG] DistrictFlow init props initialNodes.length:', (initialNodes || []).length, 'initialEdges.length:', (initialEdges || []).length); } catch (e) {}
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [rfInstance, setRfInstance] = useState(null);
+  // Tipo de línea activo — se sincroniza con la prop edgeLineType del padre y se puede cambiar desde el imperativeHandle
+  const [currentEdgeType, setCurrentEdgeType] = useState(edgeLineType || 'straight');
+  const currentEdgeTypeRef = useRef(edgeLineType || 'straight');
+  useEffect(() => {
+    currentEdgeTypeRef.current = edgeLineType || 'straight';
+    setCurrentEdgeType(edgeLineType || 'straight');
+  }, [edgeLineType]);
   // Force-visible CSS as a robust fallback when React Flow sets inline visibility:hidden
   useEffect(() => {
     try {
@@ -695,7 +867,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       source: c.from,
       target: c.to,
       label: c.label,
-      type: 'step',
+      type: 'straight',
       markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
       style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' },
       animated: false,
@@ -822,7 +994,12 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         savedNodes[n.id] = getPersistedNodeEntry(n, prev);
       });
       raw.nodes = savedNodes;
-      raw.edges = Array.isArray(nextEdges) ? nextEdges : [];
+      // Limpiar campos temporales de resaltado antes de guardar
+      raw.edges = Array.isArray(nextEdges) ? nextEdges.map(e => {
+        if (!e._originalStyle && !e._originalMarkerEnd) return e;
+        const { _originalStyle, _originalMarkerEnd, ...clean } = e;
+        return clean;
+      }) : [];
       raw.hiddenNodeIds = Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds : [];
       raw.deletedNodeIds = Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds : [];
       writeDiagramState(raw);
@@ -967,14 +1144,17 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges((eds) => {
       const updated = eds.map(e => {
         if (e.id !== id) return e;
-        const currentStyle = e.style || {};
+        const currentStyle = e._originalStyle || e.style || {};
         const nextStyle = {
           ...currentStyle,
           ...(style.strokeWidth != null ? { strokeWidth: Number(style.strokeWidth) } : {}),
           ...(style.stroke != null ? { stroke: style.stroke } : {}),
           strokeLinecap: 'round',
         };
-        return { ...e, style: nextStyle };
+        // Actualizar markerEnd para que la flecha coincida con el color de la línea
+        const strokeColor = nextStyle.stroke || currentStyle.stroke || '#000';
+        const nextMarkerEnd = { type: MarkerType.ArrowClosed, color: strokeColor };
+        return { ...e, style: nextStyle, markerEnd: nextMarkerEnd, _originalStyle: nextStyle, _originalMarkerEnd: nextMarkerEnd };
       });
       edgesRef.current = updated;
       try {
@@ -1027,7 +1207,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       source: sourceId,
       target: targetId,
       markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-      type: 'step',
+      type: currentEdgeTypeRef.current || 'straight',
       animated: false,
       style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
     };
@@ -1361,6 +1541,9 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   }, []);
 
   const doAutoLayout = useCallback(() => {
+    const ok = window.confirm('⚠️ ¿Reorganizar el diagrama automáticamente?\n\nEsta acción cambiará las posiciones de TODOS los nodos.\nSolo hazlo si realmente lo necesitas — se perderá tu disposición actual.');
+    if (!ok) return;
+
     const currentNodes = nodesRef.current || [];
     const currentEdges = edgesRef.current || [];
 
@@ -1495,13 +1678,19 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const doSave = useCallback(() => {
     try {
       const savedState = readDiagramState();
+      // Limpiar campos temporales de resaltado de edges
+      const cleanEdges = (edgesRef.current || []).map(e => {
+        if (!e._originalStyle && !e._originalMarkerEnd) return e;
+        const { _originalStyle, _originalMarkerEnd, ...clean } = e;
+        return clean;
+      });
       const saved = {
         ...savedState,
         nodes: Object.fromEntries((nodesRef.current || []).map(n => {
           const prev = savedState.nodes && savedState.nodes[n.id] && typeof savedState.nodes[n.id] === 'object' ? savedState.nodes[n.id] : {};
           return [n.id, getPersistedNodeEntry(n, prev)];
         })),
-        edges: edgesRef.current || [],
+        edges: cleanEdges,
       };
       writeDiagramState(saved);
       // Toast no bloqueante — no usa alert() que congela JS
@@ -1647,7 +1836,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           .filter(isValidSavedEdge)
           .map((edge) => normalizeSavedEdge(edge, {
             animated: showFlow,
-            type: 'step',
+            type: 'straight',
             markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
             style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
           }));
@@ -1672,7 +1861,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         existingNodeIds.add(staticNode.id);
       }
     }
-    let rfEdges = e.filter(ed => !hiddenIds.has(ed.source) && !hiddenIds.has(ed.target) && !deletedIds.has(ed.source) && !deletedIds.has(ed.target)).map(ed => ({ id: ed.id, source: ed.source, target: ed.target, markerEnd: { type: MarkerType.ArrowClosed, color: '#000' }, animated: false, type: 'step', label: ed.label, style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } }));
+    let rfEdges = e.filter(ed => !hiddenIds.has(ed.source) && !hiddenIds.has(ed.target) && !deletedIds.has(ed.source) && !deletedIds.has(ed.target)).map(ed => ({ id: ed.id, source: ed.source, target: ed.target, markerEnd: { type: MarkerType.ArrowClosed, color: '#000' }, animated: false, type: 'straight', label: ed.label, style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } }));
 
     if (saved && saved.nodes) {
       const savedPos = saved.nodes || {};
@@ -1757,16 +1946,19 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           .map((ed) => {
             const cleaned = normalizeSavedEdge(ed, {
               animated: !!showFlow,
-              type: 'step',
+              type: 'straight',
               markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
               style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
             });
+            // Usar el estilo guardado (puede ser personalizado). Solo poner defaults si falta.
+            const savedStyle = cleaned.style || { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' };
+            const savedMarker = cleaned.markerEnd || { type: MarkerType.ArrowClosed, color: savedStyle.stroke || '#000' };
             return {
               ...cleaned,
               label: cleaned.label || cleaned.name || '',
               animated: !!showFlow,
-              style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
+              style: { ...savedStyle, strokeLinecap: savedStyle.strokeLinecap || 'round' },
+              markerEnd: savedMarker,
             };
           })
           .filter(e => e.source && e.target && nodeIds.has(e.source) && nodeIds.has(e.target) && !deletedIds.has(e.source) && !deletedIds.has(e.target));
@@ -1809,20 +2001,23 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         .map((ed) => {
           const copy = normalizeSavedEdge(ed, {
             animated: showFlow,
-            type: 'step',
+            type: 'straight',
             markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
             style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
           });
           if (copy.data && copy.data.date) {
             try { copy.label = formatDateLabel(copy.data.date, connectDateFormat || 'dd/MM/yyyy'); } catch (err) {}
           }
+          // Preservar el estilo guardado personalizado — NO sobrescribir con negro fijo
+          const savedStyle = copy.style || { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' };
+          const savedMarker = copy.markerEnd || { type: MarkerType.ArrowClosed, color: savedStyle.stroke || '#000' };
           return {
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-            type: 'step',
-            style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+            type: 'straight',
             ...copy,
             id: copy.id || `${copy.source}-${copy.target}`,
             animated: showFlow,
+            style: { ...savedStyle, strokeLinecap: savedStyle.strokeLinecap || 'round' },
+            markerEnd: savedMarker,
           };
         })
         .filter(e => e.source && e.target && nodeIds.has(e.source) && nodeIds.has(e.target) && !deletedIds.has(e.source) && !deletedIds.has(e.target));
@@ -1898,17 +2093,32 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   // keep refs in sync to allow stable callbacks
   useEffect(() => { nodesRef.current = nodes; edgesRef.current = edges; }, [nodes, edges]);
 
-  // Resaltar edge seleccionada en rojo para dar feedback visual antes de eliminarla
+  // Resaltar edge seleccionada en rojo para dar feedback visual — SIN destruir el estilo guardado
   useEffect(() => {
-    setEdges((eds) => eds.map(e => ({
-      ...e,
-      style: e.id === selectedEdgeId
-        ? { stroke: '#ef4444', strokeWidth: 6, strokeLinecap: 'round' }
-        : { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
-      markerEnd: e.id === selectedEdgeId
-        ? { type: MarkerType.ArrowClosed, color: '#ef4444' }
-        : { type: MarkerType.ArrowClosed, color: '#000' },
-    })));
+    setEdges((eds) => eds.map(e => {
+      if (e.id === selectedEdgeId) {
+        // Guardar el estilo original antes de resaltar (si no está ya guardado)
+        const originalStyle = e._originalStyle || e.style || {};
+        const originalMarker = e._originalMarkerEnd || e.markerEnd;
+        return {
+          ...e,
+          _originalStyle: originalStyle,
+          _originalMarkerEnd: originalMarker,
+          style: { ...originalStyle, stroke: '#ef4444', strokeWidth: 6, strokeLinecap: 'round' },
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
+        };
+      }
+      // Restaurar estilo original si tenía uno guardado temporalmente
+      if (e._originalStyle) {
+        const { _originalStyle, _originalMarkerEnd, ...rest } = e;
+        return {
+          ...rest,
+          style: _originalStyle,
+          markerEnd: _originalMarkerEnd || { type: MarkerType.ArrowClosed, color: _originalStyle?.stroke || '#000' },
+        };
+      }
+      return e;
+    }));
   }, [selectedEdgeId]);
 
 
@@ -2004,6 +2214,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     getSelectedEdgeId: () => selectedEdgeId,
     getShowFlow: () => showFlow,
     deleteSelectedConnection,
+    setDefaultEdgeType: (type) => {
+      currentEdgeTypeRef.current = type || 'straight';
+      setCurrentEdgeType(type || 'straight');
+    },
   }), [doAutoLayout, doSave, doRestoreInitial, doViewAll, doUndo, doRedo, toggleShowFlow, addDiagramNode, addShapeNode, changeSelectedNodeColor, duplicateSelectedNode, deleteSelectedNode, resizeSelectedNode, rotateSelectedNode, updateSelectedConnectionStyle, updateSelectedEdgeLabel, selectedNodeId, selectedEdgeId, showFlow, deleteSelectedConnection]);
 
 
@@ -2078,7 +2292,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         onMoveEnd={(_, viewport) => {
           try { localStorage.setItem('district_viewport', JSON.stringify(viewport)); } catch (e) {}
         }}
-        connectionLineType="smoothstep"
+        connectionLineType="straight"
         connectionLineStyle={{ stroke: '#000', strokeWidth: 5 }}
         panOnScroll={false}
         zoomOnScroll={true}

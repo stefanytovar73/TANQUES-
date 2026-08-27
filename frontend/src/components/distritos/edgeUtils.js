@@ -23,13 +23,20 @@ export function normalizeSavedEdge(edge, defaults = {}) {
   if (normalized.sourceHandle && String(normalized.sourceHandle) === 'undefined') delete normalized.sourceHandle;
   if (normalized.targetHandle && String(normalized.targetHandle) === 'undefined') delete normalized.targetHandle;
 
+  // Preservar markerEnd guardado; solo usar defaults si no existe
   if (!normalized.markerEnd) {
     normalized.markerEnd = defaults.markerEnd || { type: 'arrowClosed', color: '#000' };
   }
+  // Preservar el estilo guardado (color/grosor personalizado); solo usar defaults si no existe
   if (!normalized.style) {
     normalized.style = defaults.style || { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' };
   }
-  if (!normalized.type) normalized.type = defaults.type || 'step';
+  // Asegurarse de que strokeLinecap esté siempre presente
+  if (normalized.style && !normalized.style.strokeLinecap) {
+    normalized.style = { ...normalized.style, strokeLinecap: 'round' };
+  }
+  // Siempre forzar tipo straight (líneas rectas sin routing)
+  normalized.type = 'straight';
   if (normalized.animated == null) normalized.animated = Boolean(defaults.animated);
 
   return normalized;

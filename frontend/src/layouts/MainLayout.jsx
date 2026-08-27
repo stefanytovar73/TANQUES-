@@ -5,16 +5,28 @@ import Header from "../components/layout/Header";
 import Sidebar from "../components/layout/Sidebar";
 
 const drawerWidth = 260;
+const collapsedWidth = 4; // narrow yellow stripe when collapsed (restored)
 
 export default function MainLayout() {
     const [mobileOpen, setMobileOpen] = useState(false);
+    const [collapsed, setCollapsed] = useState(false);
 
     const handleDrawerToggle = () => {
         setMobileOpen((prev) => !prev);
     };
 
+    const headerToggle = () => {
+        if (typeof window !== 'undefined' && window.innerWidth < 900) {
+            // mobile: open temporary drawer
+            setMobileOpen((prev) => !prev);
+        } else {
+            // desktop: toggle collapsed state
+            setCollapsed((prev) => !prev);
+        }
+    };
+
     return (
-        <Box sx={{ display: 'grid', gridTemplateColumns: `${drawerWidth}px 1fr`, gridTemplateRows: '92px 1fr', minHeight: '100vh', bgcolor: '#f4f7fb', overflowX: 'hidden' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: `${collapsed ? collapsedWidth : drawerWidth}px 1fr`, gridTemplateRows: '92px 1fr', minHeight: '100vh', bgcolor: '#f4f7fb', overflowX: 'hidden' }}>
             <CssBaseline />
 
             {/* Sidebar - occupies first column and both rows */}
@@ -31,16 +43,16 @@ export default function MainLayout() {
 
                 <Drawer
                     variant="permanent"
-                    sx={{ display: { xs: 'none', md: 'block' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth, boxShadow: 'none' } }}
+                    sx={{ display: { xs: 'none', md: 'block' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: collapsed ? collapsedWidth : drawerWidth, boxShadow: 'none' } }}
                     open
                 >
-                    <Sidebar />
+                    <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed(c => !c)} />
                 </Drawer>
             </Box>
 
             {/* Header - top right */}
-            <Box component="header" sx={{ gridColumn: '2', gridRow: '1' }}>
-                <Header onOpenSidebar={handleDrawerToggle} />
+                <Box component="header" sx={{ gridColumn: '2', gridRow: '1' }}>
+                <Header onOpenSidebar={headerToggle} />
             </Box>
 
             {/* Main content - below header */}

@@ -361,4 +361,50 @@ class TanquesController extends Controller
         $tanque->delete();
         return response()->json(['deleted' => true]);
     }
+
+    /**
+     * Obtener datos de captación (caudales) desde IBAL
+     */
+    public function captacion()
+    {
+        try {
+            $api = $this->ibal->obtenerCaptacion();
+        } catch (\Throwable $e) {
+            Log::error('Error llamando a IBAL (captacion): ' . $e->getMessage());
+            $api = ['status' => 'error', 'mensaje' => 'Error de conexión con IBAL', 'captacion' => []];
+        }
+
+        // Asegurar estructura esperada
+        if (!isset($api['captacion']) || !is_array($api['captacion'])) {
+            // Si el servicio devolvió directamente una lista, normalizar
+            if (is_array($api)) {
+                return response()->json($api);
+            }
+            return response()->json(['status' => isset($api['status']) ? $api['status'] : 'error', 'captacion' => []]);
+        }
+
+        return response()->json($api);
+    }
+
+    /**
+     * Obtener datos PTAP (caudales planta) desde IBAL
+     */
+    public function ptap()
+    {
+        try {
+            $api = $this->ibal->obtenerPtap();
+        } catch (\Throwable $e) {
+            Log::error('Error llamando a IBAL (ptap): ' . $e->getMessage());
+            $api = ['status' => 'error', 'mensaje' => 'Error de conexión con IBAL', 'ptap' => []];
+        }
+
+        if (!isset($api['ptap']) || !is_array($api['ptap'])) {
+            if (is_array($api)) {
+                return response()->json($api);
+            }
+            return response()->json(['status' => isset($api['status']) ? $api['status'] : 'error', 'ptap' => []]);
+        }
+
+        return response()->json($api);
+    }
 }

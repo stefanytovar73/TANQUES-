@@ -44,7 +44,7 @@ export default function DistrictMap() {
   const [tooltip, setTooltip] = useState(null);
   const [viewAllToggle, setViewAllToggle] = useState(false);
   const [showConnections, setShowConnections] = useState(false);
-  const [editMode, setEditMode] = useState(false);
+  const [editMode, setEditMode] = useState(true);
   const [editTool, setEditTool] = useState('select');
   const [deleteMode, setDeleteMode] = useState(false);
   const [showShapePicker, setShowShapePicker] = useState(false);
@@ -53,6 +53,7 @@ export default function DistrictMap() {
   const [connectionStrokeColor, setConnectionStrokeColor] = useState('#000000');
   const [connectionLabel, setConnectionLabel] = useState('');
   const [snack, setSnack] = useState({ open: false, msg: '' });
+  const [edgeLineType, setEdgeLineType] = useState('straight');
 
   useEffect(() => {
     try {
@@ -95,6 +96,10 @@ export default function DistrictMap() {
   }, [mergedTanques]);
   // Build nodes and resolved connections from API + static layout
   const { nodes, resolvedConnections } = useMemo(() => {
+    // attempt to read persisted custom names so we don't lose user edits
+    let persisted = {};
+    try { persisted = JSON.parse(localStorage.getItem('district_state') || '{}').nodes || {}; } catch (e) { persisted = {}; }
+
     const baseNodes = STATIC_NODES.map((node) => {
       if (node.type === 'plant' || node.type === 'district') {
         return {
@@ -118,9 +123,14 @@ export default function DistrictMap() {
         return candidates.some((candidate) => labelCandidates.some((labelCandidate) => candidate === labelCandidate || candidate.includes(labelCandidate) || labelCandidate.includes(candidate)));
       });
 
+      const savedEntry = persisted && persisted[node.id] && typeof persisted[node.id] === 'object' ? persisted[node.id] : null;
+      const customFromSaved = savedEntry && (savedEntry.customName || savedEntry.displayName || savedEntry.diagramName) ? (savedEntry.customName || savedEntry.displayName || savedEntry.diagramName) : null;
+
       return {
         ...node,
-        data: matchedTank ? { ...matchedTank, _api_id: matchedTank.id, display_name: node.label } : { display_name: node.label, __placeholder: true },
+        data: matchedTank
+          ? { ...matchedTank, _api_id: matchedTank.id, display_name: node.label, ...(customFromSaved ? { customName: customFromSaved } : {}) }
+          : { display_name: node.label, __placeholder: true, ...(customFromSaved ? { customName: customFromSaved } : {}) },
       };
     });
 
@@ -309,6 +319,38 @@ export default function DistrictMap() {
             >
               Conectar
             </Button>
+            {/* Selector tipo de línea */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5, borderRadius: 1, border: '1px solid #cbd5e1', background: '#fff' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginRight: 2 }}>Línea:</span>
+              {[
+                { value: 'straight', label: 'Recta', icon: '─' },
+                { value: 'default', label: 'Curva', icon: '⌒' },
+                { value: 'smoothstep', label: 'Suave', icon: '⌣' },
+                { value: 'step', label: 'Escalón', icon: '⌐' },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  title={opt.label}
+                  onClick={() => { setEdgeLineType(opt.value); flowRef.current?.setDefaultEdgeType?.(opt.value); }}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 5,
+                    border: edgeLineType === opt.value ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+                    background: edgeLineType === opt.value ? '#dbeafe' : '#f8fafc',
+                    fontWeight: edgeLineType === opt.value ? 800 : 500,
+                    color: edgeLineType === opt.value ? '#1d4ed8' : '#475569',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0,
+                    lineHeight: 1.1,
+                  }}
+                >
+                  <span style={{ fontSize: 15, lineHeight: 1 }}>{opt.icon}</span>
+                  <span style={{ fontSize: 9 }}>{opt.label}</span>
+                </button>
+              ))}
+            </Box>
             <Button
               size="small"
               variant={editTool === 'duplicate' && !deleteMode ? 'contained' : 'outlined'}
@@ -442,7 +484,7 @@ export default function DistrictMap() {
           {/* Ensure we always pass at least the STATIC_NODES as fallback so the map shows even if API data is missing */}
           {(() => {
             try { console.debug('[DISTRICT DEBUG] Passing nodesTo DistrictFlow count:', flowNodes.length, flowNodes.map(n => n.id)); } catch (e) {}
-            return <DistrictFlow ref={flowRef} initialNodes={flowNodes} initialEdges={resolvedConnections} onNodeSelect={(id) => { setSelectedId(id); setSelectedEdgeId(null); }} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} />;
+            return <DistrictFlow ref={flowRef} initialNodes={flowNodes} initialEdges={resolvedConnections} onNodeSelect={(id) => { setSelectedId(id); setSelectedEdgeId(null); }} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} />;
           })()}
           {tooltip ? (
             <Box sx={{ position: 'absolute', pointerEvents: 'none', left: tooltip.x - (containerRef.current?.getBoundingClientRect().left || 0) + 8, top: tooltip.y - (containerRef.current?.getBoundingClientRect().top || 0) + 8, background: 'white', p: 1, borderRadius: 1, boxShadow: 2, fontSize: 12 }}>

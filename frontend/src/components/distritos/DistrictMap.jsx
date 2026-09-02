@@ -74,7 +74,18 @@ export default function DistrictMap() {
     try { return localStorage.getItem('district_autosave') === '1'; } catch (e) { return false; }
   });
   const [diagramLocked, setDiagramLocked] = useState(() => {
-    try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; }
+    try {
+      const val = localStorage.getItem('district_locked');
+      if (val === null || typeof val === 'undefined') {
+        // Empezar bloqueado por defecto la primera vez
+        try { localStorage.setItem('district_locked', '1'); } catch (e) {}
+        return true;
+      }
+      return val === '1';
+    } catch (e) { return true; }
+  });
+  const [isAdmin, setIsAdmin] = useState(() => {
+    try { return localStorage.getItem('district_is_admin') === '1'; } catch (e) { return false; }
   });
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   // Error de conexión: ocultar si el usuario lo cierra manualmente
@@ -426,15 +437,21 @@ export default function DistrictMap() {
             <Button size="small" startIcon={editMode ? <DoneIcon /> : <EditIcon />} variant={editMode ? 'contained' : 'outlined'} sx={{ ml: 1 }} onClick={() => setEditMode(e => !e)}>{editMode ? 'Finalizar edición' : 'Editar diagrama'}</Button>
             {/* Bloquear / Permitir modificar (junto a Editar) */}
             {diagramLocked ? (
-              <Button size="small" startIcon={<LockIcon />} variant="contained" color="secondary" sx={{ ml: 1 }} onClick={() => {
-                try {
-                  // Unlock: allow editing
-                  flowRef.current?.editUnlockAllNodes?.();
-                  setDiagramLocked(false);
-                  try { localStorage.setItem('district_locked', '0'); } catch (e) {}
-                  setSnack({ open: true, msg: 'Diagrama desbloqueado' });
-                } catch (e) { console.warn(e); }
-              }}>Desbloquear</Button>
+              isAdmin ? (
+                <Button size="small" startIcon={<LockIcon />} variant="contained" color="secondary" sx={{ ml: 1 }} onClick={() => {
+                  try {
+                    // Admin unlock: allow editing only via admin action
+                    const ok = window.confirm('Confirmar desbloqueo de diagrama como administrador. ¿Continuar?');
+                    if (!ok) return;
+                    flowRef.current?.editUnlockAllNodes?.();
+                    setDiagramLocked(false);
+                    try { localStorage.setItem('district_locked', '0'); } catch (e) {}
+                    setSnack({ open: true, msg: 'Diagrama desbloqueado (admin)' });
+                  } catch (e) { console.warn(e); }
+                }}>Desbloquear (admin)</Button>
+              ) : (
+                <Button size="small" variant="outlined" color="inherit" sx={{ ml: 1 }} disabled>Bloqueado (solo admin)</Button>
+              )
             ) : (
               <Button size="small" startIcon={<LockClockIcon />} variant="outlined" color="warning" sx={{ ml: 1 }} onClick={() => {
                 try {

@@ -1388,9 +1388,14 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               const localRaw = (function() { try { return localStorage.getItem('district_state') || '{}'; } catch (e) { return '{}'; }})();
               const local = JSON.parse(localRaw || '{}');
               const localTs = (local.updated_at || local.updatedAt || local._updatedAt || '').toString();
-              if (remoteTs && (!localTs || new Date(remoteTs).getTime() > new Date(localTs).getTime())) {
-                try { applyRemoteState(remote); } catch (e) {}
-              }
+              try {
+                const locked = (function() { try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; } })();
+                if (locked) {
+                  console.log('[WS CLIENT] remote diagram:update ignored because district_locked=1');
+                } else if (remoteTs && (!localTs || new Date(remoteTs).getTime() > new Date(localTs).getTime())) {
+                  try { applyRemoteState(remote); } catch (e) {}
+                }
+              } catch (e) {}
             }
           } catch (e) {}
         });
@@ -1439,7 +1444,14 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         const remoteTs = (remote.updated_at || remote.updatedAt || remote._updatedAt || '').toString();
         const localTs = (local.updated_at || local.updatedAt || local._updatedAt || '').toString();
         if (remoteTs && (!localTs || new Date(remoteTs).getTime() > new Date(localTs).getTime())) {
-          try { if (mounted && typeof applyRemoteState === 'function') { applyRemoteState(remote); } } catch (e) {}
+          try {
+            const locked = (function() { try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; } })();
+            if (mounted && typeof applyRemoteState === 'function' && !locked) {
+              applyRemoteState(remote);
+            } else if (locked) {
+              console.log('[POLL] remote state ignored because district_locked=1');
+            }
+          } catch (e) {}
         }
       } catch (e) {}
     }, 15000);
@@ -1562,7 +1574,14 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         if (hasRemoteNodes && !hasLocalNodes) {
           try {
             // Apply remote state in-memory to avoid disrupting user's layout; do not overwrite localStorage unless autosave enabled
-            if (mounted && typeof applyRemoteState === 'function') applyRemoteState(remote);
+            try {
+              const locked = (function() { try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; } })();
+              if (mounted && typeof applyRemoteState === 'function' && !locked) {
+                applyRemoteState(remote);
+              } else if (locked) {
+                console.log('[INIT] remote state load skipped because district_locked=1');
+              }
+            } catch (e) {}
           } catch (e) {}
         }
       } catch (e) {}
@@ -1717,7 +1736,8 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
     setNodes(nextNodes);
     nodesRef.current = nextNodes;
-    persistDistrictState(nextNodes, edgesRef.current);
+      persistDistrictState(nextNodes, edgesRef.current);
+      try { const raw = readDiagramState(); writeDiagramState(raw); } catch (err) {}
   }, [persistDistrictState]);
 
   const changeSelectedNodeColor = useCallback((color, targetId = selectedNodeId) => {
@@ -1744,6 +1764,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       });
       nodesRef.current = updated;
       persistDistrictState(updated, edgesRef.current);
+      try { const raw = readDiagramState(); writeDiagramState(raw); } catch (err) {}
       return updated;
     });
   }, [selectedNodeId, persistDistrictState]);
@@ -1894,6 +1915,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges(updated);
     edgesRef.current = updated;
     try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
+    try {
+      const raw = readDiagramState();
+      writeDiagramState(raw);
+    } catch (err) {}
   }, [selectedEdgeId, readDiagramState, writeDiagramState]);
 
   const updateSelectedEdgeLabel = useCallback((edgeId = selectedEdgeId, newLabel = '') => {
@@ -1902,6 +1927,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges(updated);
     edgesRef.current = updated;
     try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
+    try {
+      const raw = readDiagramState();
+      writeDiagramState(raw);
+    } catch (err) {}
   }, [selectedEdgeId, readDiagramState, writeDiagramState]);
 
   const upsertOrToggleConnection = useCallback((sourceId, targetId) => {
@@ -2015,6 +2044,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges(nextEdges);
     setSelectedNodeId(null);
     persistDistrictState(nextNodes, nextEdges);
+    try {
+      // Ensure deletedNodeIds is stored and pushed to server immediately
+      writeDiagramState(nextState);
+    } catch (err) { console.warn('[DistrictFlow] writeDiagramState on delete failed', err && err.message); }
     return true;
   }, [persistDistrictState, readDiagramState, selectedNodeId, writeDiagramState]);
 

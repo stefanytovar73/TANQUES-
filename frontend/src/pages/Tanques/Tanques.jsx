@@ -367,9 +367,16 @@ function Tanques() {
       display_name: form.nombre || form.originalNombre,
       tag: form.originalNombre || form.nombre,
     };
+    const rawTankLookup = {
+      id: form.id ?? null,
+      nombre: form.originalNombre || form.nombre,
+      display_name: form.originalNombre || form.nombre,
+      tag: form.originalNombre || form.nombre,
+    };
 
-    const existingCatalogEntry = findCatalogEntry(formTank, catalogRef.current.length ? catalogRef.current : loadCatalogFromStorage());
-    const catalogId = existingCatalogEntry?.id || normalizeText(form.tag || form.nombre || payloadName || "") || (form.id ? normalizeText(String(form.id)) : "");
+    const currentCatalog = catalogRef.current.length ? catalogRef.current : loadCatalogFromStorage();
+    const existingCatalogEntry = [formTank, rawTankLookup].map((candidate) => findCatalogEntry(candidate, currentCatalog)).find(Boolean) || null;
+    const catalogId = existingCatalogEntry?.id || normalizeText(form.originalNombre || form.tag || form.nombre || payloadName || "") || (form.id ? normalizeText(String(form.id)) : "");
 
     const rawAlturaRebose = parseNumberValue(form.alturaRebose);
     const catalogUpdates = {

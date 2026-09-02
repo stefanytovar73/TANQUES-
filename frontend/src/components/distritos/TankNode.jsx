@@ -35,7 +35,7 @@ export default function TankNode({ data, selected }) {
         fill="#0b2447"
         textAnchor="middle" dominantBaseline="middle"
       >
-        {data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'N/D'}
+        {data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'Sin datos'}
       </text>
 
       {/* ── cuerpo del tanque ── */}
@@ -77,7 +77,7 @@ export default function TankNode({ data, selected }) {
           textAnchor="middle" dominantBaseline="middle"
           fill="#1d4ed8"
         >
-          N/D
+          Sin datos
         </text>
       )}
 

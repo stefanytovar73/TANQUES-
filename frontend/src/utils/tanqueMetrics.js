@@ -59,9 +59,10 @@ export function calcPorcentaje(valor_m, altura_rebose) {
   if (valor_m === null || valor_m === undefined || valor_m === "") return null;
   if (!Number.isFinite(Number(valor_m))) return null;
 
-  if (altura_rebose === null || altura_rebose === undefined || altura_rebose === "") return 0;
-  if (!Number.isFinite(Number(altura_rebose))) return 0;
-  if (Number(altura_rebose) <= 0) return 0;
+  // If altura_rebose is missing or invalid, do not infer 0% — return null so UI shows "Sin datos".
+  if (altura_rebose === null || altura_rebose === undefined || altura_rebose === "") return null;
+  if (!Number.isFinite(Number(altura_rebose))) return null;
+  if (Number(altura_rebose) <= 0) return null;
 
   return (Number(valor_m) / Number(altura_rebose)) * 100;
 }
@@ -78,11 +79,12 @@ export function calculateDisplayPorcentaje(valor_m, altura_rebose_calibrada) {
   if (valor_m === null || valor_m === undefined || valor_m === "") return null;
   if (!Number.isFinite(Number(valor_m))) return null;
 
-  if (altura_rebose_calibrada === null || altura_rebose_calibrada === undefined || altura_rebose_calibrada === "") return 0;
-  if (!Number.isFinite(Number(altura_rebose_calibrada))) return 0;
+  // Do not return 0 when denominator is missing or invalid — return null so callers display 'Sin datos'.
+  if (altura_rebose_calibrada === null || altura_rebose_calibrada === undefined || altura_rebose_calibrada === "") return null;
+  if (!Number.isFinite(Number(altura_rebose_calibrada))) return null;
 
   const denom = Number(altura_rebose_calibrada);
-  if (denom <= 0) return 0;
+  if (denom <= 0) return null;
   const raw = (Number(valor_m) / denom) * 100;
   const clamped = Math.max(0, Math.min(100, raw));
   return clamped;

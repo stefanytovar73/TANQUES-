@@ -38,35 +38,35 @@ export default function ElementDetails({ open, onClose, node, onShowConnections,
         <Divider sx={{ my: 2 }} />
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Nivel</Typography>
-        <Typography sx={{ mb: 1 }}>{data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'N/D'}</Typography>
+        <Typography sx={{ mb: 1 }}>{data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Última lectura</Typography>
-        <Typography sx={{ mb: 1 }}>{data.fecha_hora || data.fecha || data.timestamp || data.ultimo_update || data.last_update || 'N/D'}</Typography>
+        <Typography sx={{ mb: 1 }}>{data.fecha_hora || data.fecha || data.timestamp || data.ultimo_update || data.last_update || 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Porcentaje</Typography>
-        <Typography sx={{ mb: 1 }}>{data.porcentaje != null ? `${Math.round(data.porcentaje)} %` : 'N/D'}</Typography>
+        <Typography sx={{ mb: 1 }}>{data.porcentaje != null ? `${Math.round(data.porcentaje)} %` : 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Estado</Typography>
-        <Typography sx={{ mb: 2 }}>{data.estado || data.status || 'N/D'}</Typography>
+        <Typography sx={{ mb: 2 }}>{data.estado || data.status || 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Capacidad actual</Typography>
-        <Typography sx={{ mb: 1 }}>{data.capacidad_actual_m3 != null ? `${data.capacidad_actual_m3} m³` : (data.capacidad_actual != null ? `${data.capacidad_actual} m³` : 'N/D')}</Typography>
+        <Typography sx={{ mb: 1 }}>{data.capacidad_actual_m3 != null ? `${data.capacidad_actual_m3} m³` : (data.capacidad_actual != null ? `${data.capacidad_actual} m³` : 'Sin datos')}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Capacidad máxima</Typography>
-        <Typography sx={{ mb: 2 }}>{data.capacidad_maxima_m3 != null ? `${data.capacidad_maxima_m3} m³` : (data.capacidad_maxima != null ? `${data.capacidad_maxima} m³` : 'N/D')}</Typography>
+        <Typography sx={{ mb: 2 }}>{data.capacidad_maxima_m3 != null ? `${data.capacidad_maxima_m3} m³` : (data.capacidad_maxima != null ? `${data.capacidad_maxima} m³` : 'Sin datos')}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Entradas</Typography>
         {entradas.length ? (
           entradas.map((id) => <Typography key={`in-${id}`} sx={{ fontSize: 13 }}>• {labelFor(id)}</Typography>)
         ) : (
-          <Typography sx={{ fontSize: 13 }}>N/D</Typography>
+          <Typography sx={{ fontSize: 13 }}>Sin datos</Typography>
         )}
 
         <Typography variant="subtitle2" sx={{ color: '#475569', mt: 1 }}>Salidas</Typography>
         {salidas.length ? (
           salidas.map((id) => <Typography key={`out-${id}`} sx={{ fontSize: 13 }}>• {labelFor(id)}</Typography>)
         ) : (
-          <Typography sx={{ fontSize: 13 }}>N/D</Typography>
+          <Typography sx={{ fontSize: 13 }}>Sin datos</Typography>
         )}
 
         <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}> 

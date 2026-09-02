@@ -11,6 +11,7 @@ import { loadCatalog, saveCatalog, mergeApiTanquesWithCatalog, updateCatalogEntr
 const STORAGE_KEY = "ibal-tanques:lastValidTanques";
 const MAX_RETRIES = 2;
 const BASE_RETRY_DELAY_MS = 1500;
+const ALERTA_PERDIDA_IBAL = "ALERTA: pérdida de conexión con la fuente de datos IBAL";
 
 function ConfiguracionTanquesSection({ tanques, onEditConfig }) {
     const formatPct = (tanque) => {
@@ -72,27 +73,7 @@ function Dashboard() {
     const [lastCachedAt, setLastCachedAt] = useState(null);
 
     const loadCachedTanques = () => {
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (!raw) return false;
-            const cached = JSON.parse(raw);
-            if (!cached?.tanques || !Array.isArray(cached.tanques)) return false;
-            const sanitizedTanques = cached.tanques.map((tank) => {
-                const copy = { ...tank };
-                ["porcentaje", "porcentaje_capacidad", "porcentaje_api", "porcentaje_capacidad_api", "pct"].forEach((key) => {
-                    if (Object.prototype.hasOwnProperty.call(copy, key)) delete copy[key];
-                });
-                return copy;
-            });
-            setTanques(sanitizedTanques);
-            setLastCachedAt(cached.timestamp || Date.now());
-            setError("");
-            setLoading(false);
-            return true;
-        } catch (err) {
-            console.warn("No se pudo leer cache local de tanques", err);
-            return false;
-        }
+        return false;
     };
 
     const loadCatalogFromStorage = () => {
@@ -219,11 +200,26 @@ function Dashboard() {
     const fetchTanques = async (attempt = 0) => {
         try {
             const response = await tanqueService.getTanques();
-            const serverTanques = response?.tanques ?? [];
-            // store raw API tanques; merge for display is handled by `mergedTanques` memo
+            const serverTanques = Array.isArray(response?.tanques) ? response.tanques : [];
+            const apiStatus = response?.status ?? "ok";
+
+            if (apiStatus === "error" || apiStatus === "invalid" || serverTanques.length === 0) {
+                try {
+                    localStorage.removeItem(STORAGE_KEY);
+                } catch (err) {
+                    console.warn("No se pudo limpiar la caché local del dashboard", err);
+                }
+                setTanques([]);
+                setError(ALERTA_PERDIDA_IBAL);
+                setLoading(false);
+                if (attempt < MAX_RETRIES) {
+                    window.setTimeout(() => fetchTanques(attempt + 1), BASE_RETRY_DELAY_MS * (attempt + 1));
+                }
+                return;
+            }
+
             setTanques(serverTanques);
             saveCachedTanques(serverTanques);
-            // diagnostic log for selected tanks
             const toReport = serverTanques.filter((t) => reportTankNames.includes(t.display_name ?? t.nombre));
             logDiagnostics(toReport);
             const calibrationWatch = serverTanques.filter((t) => WATCHLIST_CALIBRACION.includes(t.display_name ?? t.nombre));
@@ -232,8 +228,8 @@ function Dashboard() {
             setLoading(false);
         } catch (err) {
             console.error("Error al obtener tanques:", err);
-            const hasCachedData = tanques.length > 0;
-            setError(hasCachedData ? "No se pudo actualizar la información. Usando datos locales guardados." : "No fue posible obtener la información del IBAL.");
+            setTanques([]);
+            setError(ALERTA_PERDIDA_IBAL);
             setLoading(false);
             if (attempt < MAX_RETRIES) {
                 window.setTimeout(() => fetchTanques(attempt + 1), BASE_RETRY_DELAY_MS * (attempt + 1));
@@ -243,8 +239,8 @@ function Dashboard() {
 
     useEffect(() => {
         loadCatalogFromStorage();
-        const cacheLoaded = loadCachedTanques();
-        if (!cacheLoaded) setLoading(true);
+        setLoading(true);
+        setError("");
         fetchTanques();
     }, []);
 

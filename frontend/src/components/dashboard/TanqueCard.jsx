@@ -63,7 +63,7 @@ function TanqueCard({ tanque }) {
 
                 {/* Visual del tanque */}
                 <Box sx={{ display: "grid", placeItems: "center" }}>
-                    <TanqueVisual porcentaje={porcentaje ?? 0} />
+                    <TanqueVisual porcentaje={porcentaje} />
                 </Box>
 
                 {/* Nivel actual */}

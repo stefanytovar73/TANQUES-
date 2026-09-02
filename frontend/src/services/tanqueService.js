@@ -3,7 +3,7 @@ import api from "../api/axios";
 let cache = null;
 let cacheExpiresAt = 0;
 let pendingRequest = null;
-const CACHE_TTL_MS = 60000;
+const CACHE_TTL_MS = 30000;
 
 const tankServiceInternal = {};
 

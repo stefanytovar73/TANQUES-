@@ -1,9 +1,9 @@
 import { Box, Typography } from "@mui/material";
 
 export default function TanqueVisual({ porcentaje }) {
-    const porcentajeValue = Number.isFinite(Number(porcentaje)) ? Math.max(0, Math.min(100, Number(porcentaje))) : 0;
+    const porcentajeValue = Number.isFinite(Number(porcentaje)) ? Math.max(0, Math.min(100, Number(porcentaje))) : null;
 
-    const showInside = porcentajeValue >= 8; // threshold to render text inside water
+    const showInside = porcentajeValue != null && porcentajeValue >= 8; // threshold to render text inside water
 
     return (
         <Box sx={{ width: 180, height: 214, position: "relative", display: "grid", placeItems: "center" }}>
@@ -93,7 +93,7 @@ export default function TanqueVisual({ porcentaje }) {
                         bottom: 0,
                         left: 0,
                         right: 0,
-                        height: `${porcentajeValue}%`,
+                        height: `${porcentajeValue != null ? porcentajeValue : 0}%`,
                         transition: "height 0.7s ease",
                         background: "linear-gradient(180deg, #3A7BE0 0%, #7DB4FF 42%, #D8EEFF 100%)",
                         display: "grid",
@@ -157,7 +157,7 @@ export default function TanqueVisual({ porcentaje }) {
                         whiteSpace: 'nowrap',
                     }}
                 >
-                    {`${Math.round(porcentajeValue)}%`}
+                    {porcentajeValue == null ? 'Sin datos' : `${Math.round(porcentajeValue)}%`}
                 </Typography>
             </Box>
             <Box

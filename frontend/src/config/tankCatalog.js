@@ -1,6 +1,5 @@
 import { TANQUES_CONFIG } from "./tanquesConfig.js";
 import { calcPorcentaje, calculatePorcentaje } from "../utils/tanqueMetrics.js";
-import ALTURAS_REBOSE_CALIBRADAS from "./calibrations.js";
 
 const STORAGE_KEY = "ibal-tanques:tankCatalog";
 
@@ -210,73 +209,49 @@ const calculateDisplayPorcentajeFromValues = (nivel, altura_rebose) => {
     return raw == null ? null : raw; // raw percentage (0-100), caller rounds
 };
 
-// Restore the calibrated local percentage logic that was already working for the tank catalog.
-const normalizedCalibrations = Object.fromEntries(
-    Object.entries(ALTURAS_REBOSE_CALIBRADAS).map(([k, v]) => [normalizeText(k), v])
-);
+const calculateDisplayPorcentaje = (tank, explicitHeight = null) => {
+    if (tank == null) return null;
 
-const resolveCalibratedHeight = (tank) => {
-    if (!tank) return null;
-
-    const values = [
-        tank.altura_rebose_m,
-        tank.altura_rebose_calibrada,
-        tank.altura_rebose,
-        tank.alturaRebose,
-        tank.alturaReboseCalibrada,
-    ];
-
-    for (const value of values) {
-        if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) {
-            return Number(value);
-        }
+    if (typeof tank === "number" || typeof tank === "string") {
+        const nivel = parseNumber(tank);
+        if (nivel == null) return null;
+        const altura = parseNumber(explicitHeight);
+        if (altura == null || altura <= 0) return null;
+        const raw = calculatePorcentaje(nivel, altura);
+        return raw == null ? null : Math.round(raw);
     }
 
-    try {
-        const configEntry = findCatalogEntry(tank, DEFAULT_CATALOG);
-        if (configEntry && configEntry.altura_rebose_calibrada !== null && configEntry.altura_rebose_calibrada !== undefined && configEntry.altura_rebose_calibrada !== "" && Number.isFinite(Number(configEntry.altura_rebose_calibrada))) {
-            return Number(configEntry.altura_rebose_calibrada);
-        }
-    } catch (e) {
-        // ignore and continue with explicit map
-    }
-
-    const candidates = [tank.tag, tank.display_name, tank.nombre, tank.id != null ? String(tank.id) : null]
-        .filter(Boolean)
-        .map(normalizeText);
-
-    for (const c of candidates) {
-        if (!c || !Object.prototype.hasOwnProperty.call(normalizedCalibrations, c)) continue;
-        const calibrated = normalizedCalibrations[c];
-        if (calibrated !== null && calibrated !== undefined && Number.isFinite(Number(calibrated))) {
-            return Number(calibrated);
-        }
-    }
-
-    return null;
-};
-
-const calculateDisplayPorcentaje = (tank) => {
-    if (!tank) return null;
-
-    const nivel = (tank.valor_m !== null && tank.valor_m !== undefined && tank.valor_m !== "") && Number.isFinite(Number(tank.valor_m)) ? Number(tank.valor_m) : null;
+    const nivel = (tank.valor_m !== null && tank.valor_m !== undefined && tank.valor_m !== "") && Number.isFinite(Number(tank.valor_m)) ? Number(tank.valor_m)
+        : ((tank.nivel !== null && tank.nivel !== undefined && tank.nivel !== "") && Number.isFinite(Number(tank.nivel)) ? Number(tank.nivel) : null);
     if (nivel === null) return null;
 
-    const calibratedHeight = resolveCalibratedHeight(tank);
-    if (calibratedHeight == null) return null;
+    // Regla: SIEMPRE calcular con (valor_m / altura_rebose). No usar porcentaje_capacidad como
+    // fuente primaria: es un cálculo volumétrico del backend, no una relación de altura.
+    // La API puede enviar altura_rebose_m o altura_rebose; el catálogo aporta altura_rebose_calibrada.
+    const providedHeight = explicitHeight ?? tank.altura_rebose ?? tank.altura_rebose_m ?? tank.altura_rebose_calibrada ?? tank.alturaRebose ?? null;
+    if (providedHeight === null || providedHeight === undefined || providedHeight === "") return null;
+    if (!Number.isFinite(Number(providedHeight))) return null;
 
-    const raw = calculatePorcentaje(nivel, calibratedHeight);
-    return raw == null ? null : Math.round(raw);
+    const rawHeight = Number(providedHeight);
+    if (rawHeight <= 0) return null;
+
+    const computed = calculatePorcentaje(nivel, rawHeight);
+    if (computed == null) return null;
+    return Math.round(computed);
 };
 
 const sanitizeTankForDisplay = (tank) => {
     if (!tank || typeof tank !== "object") return tank;
     const sanitized = { ...tank };
+    // Preservar los valores raw de la API antes de limpiar campos calculados previos.
+    // porcentaje_capacidad es el campo real que devuelve IBAL; NO borrarlo si no hay porcentaje ya computado.
+    const rawPorcentajeCapacidad = Number.isFinite(Number(sanitized.porcentaje_capacidad)) ? Number(sanitized.porcentaje_capacidad) : null;
     delete sanitized.porcentaje;
-    delete sanitized.porcentaje_capacidad;
     delete sanitized.porcentaje_api;
     delete sanitized.porcentaje_capacidad_api;
     delete sanitized.pct;
+    // Restaurar porcentaje_capacidad si existía, para que mergeTankWithCatalog lo pueda leer
+    if (rawPorcentajeCapacidad != null) sanitized.porcentaje_capacidad = rawPorcentajeCapacidad;
     return sanitized;
 };
 
@@ -284,38 +259,59 @@ const mergeTankWithCatalog = (tank, catalog) => {
     const sourceTank = sanitizeTankForDisplay(tank);
     const config = findCatalogEntry(sourceTank, catalog);
     const nivelActual = Number.isFinite(Number(sourceTank.valor_m)) ? Number(sourceTank.valor_m) : null;
-    const computedAltura = (sourceTank.altura_rebose !== null && sourceTank.altura_rebose !== undefined && sourceTank.altura_rebose !== "") && Number.isFinite(Number(sourceTank.altura_rebose)) ? Number(sourceTank.altura_rebose) : null;
-    const calibratedHeight = config?.altura_rebose_calibrada != null && config?.altura_rebose_calibrada !== "" ? Number(config.altura_rebose_calibrada) : resolveCalibratedHeight(sourceTank);
-    const shouldUseCalibratedDynamic = calibratedHeight != null && nivelActual != null;
-    const computedPorcentaje = shouldUseCalibratedDynamic ? Math.round(calculatePorcentaje(nivelActual, calibratedHeight)) : null;
 
-    const merged = {
+    // Prioridad de altura_rebose:
+    //  1. config.altura_rebose_calibrada  ← coincide con el porcentaje que muestra IBAL
+    //  2. config.altura_rebose            ← valor del catálogo sin calibrar
+    //  3. API altura_rebose_m             ← raw del sensor (útil solo cuando no hay catálogo)
+    //  4. API altura_rebose               ← último recurso
+    const rawAltura = (config?.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada)))
+        ? Number(config.altura_rebose_calibrada)
+        : ((config?.altura_rebose != null && Number.isFinite(Number(config.altura_rebose)))
+            ? Number(config.altura_rebose)
+            : ((sourceTank.altura_rebose_m !== null && sourceTank.altura_rebose_m !== undefined && sourceTank.altura_rebose_m !== '') && Number.isFinite(Number(sourceTank.altura_rebose_m))
+                ? Number(sourceTank.altura_rebose_m)
+                : ((sourceTank.altura_rebose !== null && sourceTank.altura_rebose !== undefined && sourceTank.altura_rebose !== '') && Number.isFinite(Number(sourceTank.altura_rebose))
+                    ? Number(sourceTank.altura_rebose) : null)));
+
+    // Si calidad=DUDOSA o sin_datos=true → no calcular porcentaje; la UI mostrará "Sin datos"
+    const isBadQuality = sourceTank.calidad === 'DUDOSA' || sourceTank.sin_datos === true;
+
+    const computedPorcentaje = (!isBadQuality && nivelActual != null && rawAltura != null && rawAltura > 0)
+        ? calculateDisplayPorcentaje({ ...sourceTank, valor_m: nivelActual, altura_rebose: rawAltura })
+        : null;
+
+    return {
         ...sourceTank,
-        area_m2: config?.area_m2 ?? sourceTank.area_m2 ?? null,
-        altura_rebose: computedAltura,
-        altura_rebose_calibrada: calibratedHeight,
-        altura_total: config?.altura_total ?? sourceTank.altura_total ?? null,
-        volumen: config?.volumen ?? sourceTank.volumen ?? sourceTank.volumen_m3 ?? null,
-        largo: config?.largo ?? sourceTank.largo ?? null,
-        ancho: config?.ancho ?? sourceTank.ancho ?? null,
-        compartimientos: config?.compartimientos ?? sourceTank.compartimientos ?? null,
-        cota_entrada: config?.cota_entrada ?? sourceTank.cota_entrada ?? null,
-        cota_salida: config?.cota_salida ?? sourceTank.cota_salida ?? null,
-        cota_fondo: config?.cota_fondo ?? sourceTank.cota_fondo ?? null,
-        cota_rebose: config?.cota_rebose ?? sourceTank.cota_rebose ?? null,
-        nivel_maximo: config?.nivel_maximo ?? sourceTank.nivel_maximo ?? null,
-        capacidad_actual_m3: config?.capacidad_actual_m3 ?? sourceTank.capacidad_actual_m3 ?? sourceTank.capacidad_actual ?? null,
-        capacidad_maxima_m3: config?.capacidad_maxima_m3 ?? sourceTank.capacidad_maxima_m3 ?? sourceTank.capacidad_maxima ?? null,
-        volumen_restante_m3: config?.volumen_restante_m3 ?? sourceTank.volumen_restante_m3 ?? sourceTank.rebose ?? null,
+        area_m2: sourceTank.area_m2 ?? config?.area_m2 ?? null,
+        altura_rebose: rawAltura,
+        // Preservar también con clave _m para compatibilidad
+        altura_rebose_m: rawAltura ?? sourceTank.altura_rebose_m ?? null,
+        altura_rebose_calibrada: sourceTank.altura_rebose_calibrada ?? rawAltura ?? null,
+        altura_total: sourceTank.altura_total ?? config?.altura_total ?? null,
+        volumen: sourceTank.volumen ?? sourceTank.volumen_m3 ?? config?.volumen ?? null,
+        largo: sourceTank.largo ?? config?.largo ?? null,
+        ancho: sourceTank.ancho ?? config?.ancho ?? null,
+        compartimientos: sourceTank.compartimientos ?? config?.compartimientos ?? null,
+        cota_entrada: sourceTank.cota_entrada ?? config?.cota_entrada ?? null,
+        cota_salida: sourceTank.cota_salida ?? config?.cota_salida ?? null,
+        cota_fondo: sourceTank.cota_fondo ?? config?.cota_fondo ?? null,
+        cota_rebose: sourceTank.cota_rebose ?? config?.cota_rebose ?? null,
+        nivel_maximo: sourceTank.nivel_maximo ?? config?.nivel_maximo ?? null,
+        // La API IBAL usa capacidad_m3 — mapear a los campos estándar
+        capacidad_actual_m3: sourceTank.capacidad_actual_m3 ?? sourceTank.capacidad_actual ?? sourceTank.capacidad_m3 ?? config?.capacidad_actual_m3 ?? null,
+        capacidad_maxima_m3: sourceTank.capacidad_maxima_m3 ?? sourceTank.capacidad_maxima ?? sourceTank.capacidad_m3 ?? config?.capacidad_maxima_m3 ?? null,
+        volumen_restante_m3: sourceTank.volumen_restante_m3 ?? sourceTank.rebose ?? config?.volumen_restante_m3 ?? null,
+        nombre: config?.nombre ?? sourceTank.nombre ?? sourceTank.display_name ?? sourceTank.tag ?? null,
         display_name: config?.display_name ?? sourceTank.display_name ?? sourceTank.nombre ?? sourceTank.tag ?? null,
+        // Preserve raw API percentage fields and normalize an authoritative `porcentaje` when IBAL provides it
         porcentaje_api: Number.isFinite(Number(sourceTank.porcentaje)) ? Number(sourceTank.porcentaje) : null,
+        porcentaje_capacidad: Number.isFinite(Number(sourceTank.porcentaje_capacidad)) ? Number(sourceTank.porcentaje_capacidad) : null,
         porcentaje_capacidad_api: Number.isFinite(Number(sourceTank.porcentaje_capacidad)) ? Number(sourceTank.porcentaje_capacidad) : null,
         porcentaje: computedPorcentaje,
         nivel: nivelActual,
         valor_m: sourceTank.valor_m,
     };
-
-    return merged;
 };
 
 const mergeApiTanquesWithCatalog = (apiTanques, catalog) => {

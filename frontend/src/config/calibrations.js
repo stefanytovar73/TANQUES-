@@ -20,12 +20,9 @@ const ALTURAS_REBOSE_CALIBRADAS = {
   "La 15": 8.4403921569,
   "La Quince": 8.4403921569,
   "Tanque La 15": 8.4403921569,
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
-  "La 29": 6.6551724138,
-  "Tanque 29": 6.6551724138,
-  "Tanque La 29": 6.6551724138,
+  "La 29": 3.01,
+  "Tanque 29": 3.01,
+  "Tanque La 29": 3.01,
   // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
   // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
   // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.

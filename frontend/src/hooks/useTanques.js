@@ -6,14 +6,18 @@ export default function useTanques() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    const cargarTanques = async (showLoading = false) => {
+    // forceRefresh=true fuerza una nueva solicitud a la API ignorando el caché
+    const cargarTanques = async (showLoading = false, forceRefresh = false) => {
         if (showLoading) setLoading(true);
 
         try {
-            const data = await tanqueService.getTanques();
+            const data = await tanqueService.getTanques(forceRefresh);
             setTanques(data.tanques || []);
             setError(null);
         } catch (err) {
+            // On any error from IBAL/backend do not preserve previous data.
+            // Clear `tanques` so UI does not display stale data as current.
+            setTanques([]);
             setError(err);
         } finally {
             if (showLoading) setLoading(false);
@@ -22,7 +26,8 @@ export default function useTanques() {
 
     useEffect(() => {
         cargarTanques(true);
-        const intervalo = window.setInterval(() => cargarTanques(false), 60000);
+        // Sondeo cada 30 s con forceRefresh=true para bypassar el caché
+        const intervalo = window.setInterval(() => cargarTanques(false, true), 30000);
         return () => clearInterval(intervalo);
     }, []);
 

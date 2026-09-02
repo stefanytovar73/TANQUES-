@@ -12,14 +12,7 @@ class IbalApiService
     {
         $cacheKey = __METHOD__;
 
-        // Try to serve a recent successful response from cache first
-        $cached = Cache::get($cacheKey);
-        if ($cached) {
-            return $cached;
-        }
-
         try {
-            // Retry a couple times and use a slightly larger timeout to accommodate network latency
             $response = Http::retry(2, 100)->withHeaders([
                 'X-API-Key' => env('IBAL_API_KEY')
             ])->timeout(10)->get(rtrim(env('IBAL_API_URL'), '/') . '/tanques');
@@ -38,8 +31,17 @@ class IbalApiService
             }
 
             $json = $response->json();
+            if (!is_array($json) || !isset($json['tanques']) || !is_array($json['tanques']) || count($json['tanques']) === 0) {
+                Log::error('IbalApiService: respuesta inválida o sin datos actuales', [
+                    'body' => $response->body(),
+                ]);
+                return [
+                    'status' => 'invalid',
+                    'mensaje' => 'IBAL no devolvió datos actuales válidos',
+                    'tanques' => []
+                ];
+            }
 
-            // Cache only successful responses for a short time window (30 seconds)
             try {
                 Cache::put($cacheKey, $json, now()->addSeconds(30));
             } catch (\Throwable $e) {
@@ -52,6 +54,32 @@ class IbalApiService
                 'message' => $e->getMessage(),
                 'exception' => get_class($e),
             ]);
+
+            // Intentar fallback local (archivo ../tanques.json) para desarrollo offline
+            try {
+                $localPath = base_path('../tanques.json');
+                if (file_exists($localPath)) {
+                    $raw = file_get_contents($localPath);
+                    $local = json_decode($raw, true);
+                    if (is_array($local) && isset($local['tanques'])) {
+                        return [
+                            'status' => 'fallback',
+                            'mensaje' => 'Usando datos locales (fallback)',
+                            'tanques' => $local['tanques']
+                        ];
+                    }
+                    // Si el archivo contiene directamente un array de tanques
+                    if (is_array($local)) {
+                        return [
+                            'status' => 'fallback',
+                            'mensaje' => 'Usando datos locales (fallback)',
+                            'tanques' => $local
+                        ];
+                    }
+                }
+            } catch (\Throwable $e2) {
+                Log::warning('IbalApiService: fallback local falló', ['msg' => $e2->getMessage()]);
+            }
 
             return [
                 'status' => 'error',

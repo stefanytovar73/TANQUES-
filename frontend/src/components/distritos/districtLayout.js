@@ -1,8 +1,8 @@
 // Posiciones y conexiones visuales (configuración solo visual)
 const NODES = [
-  { id: 'ptap-pola-1', type: 'plant', label: 'PTAP LA POLA N.º 1', position: { x: 120, y: 80 } },
-  { id: 'ptap-pola-2', type: 'plant', label: 'PTAP LA POLA N.º 2', position: { x: 120, y: 220 } },
-  { id: 'ptap-chembe', type: 'plant', label: 'PTAP CHEMBE', position: { x: 120, y: 360 } },
+  { id: 'ptap-pola-1', type: 'plant', label: 'COMBEIMA 1', position: { x: 120, y: 80 } },
+  { id: 'ptap-pola-2', type: 'plant', label: 'COMBEIMA 2', position: { x: 120, y: 220 } },
+  { id: 'ptap-chembe', type: 'plant', label: 'CAY', position: { x: 120, y: 360 } },
 
   { id: 'tanque-belen', type: 'tank', label: 'Belén', position: { x: 360, y: 80 } },
   { id: 'tanque-belen-aurora', type: 'tank', label: 'La Aurora', position: { x: 560, y: 80 } },

@@ -1,0 +1,6 @@
+{
+  "tanques": [
+    { "id": "T1", "tag": "T1", "display_name": "Alsacia", "valor_m": 0.92, "altura_rebose": 2.5, "porcentaje": 37.0 },
+    { "id": "T2", "tag": "T2", "display_name": "Ambala 1", "valor_m": 2.22, "altura_rebose": 6.5, "porcentaje": 34.0 }
+  ]
+}

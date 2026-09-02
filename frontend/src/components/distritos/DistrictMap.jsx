@@ -1,8 +1,9 @@
 import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
-import { Box, Paper, TextField, InputAdornment, IconButton, Autocomplete, Button, OutlinedInput, Snackbar } from '@mui/material';
+import { Box, Paper, TextField, InputAdornment, IconButton, Autocomplete, Button, OutlinedInput, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions, Collapse } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import debounce from '../../utils/debounce';
 import { loadCatalog, mergeApiTanquesWithCatalog, calculateDisplayPorcentaje, normalizeText, findCatalogEntry } from '../../config/tankCatalog';
+import diagramService from '../../services/diagramService';
 import { getStatusMeta } from '../../utils/statusUtils';
 import { NODES as STATIC_NODES, CONNECTIONS as STATIC_CONNECTIONS } from './districtLayout';
 // TankNode/PlantNode/DistrictNode/Connection rendered inside DistrictFlow
@@ -18,7 +19,15 @@ import SaveIcon from '@mui/icons-material/Save';
 import RestoreIcon from '@mui/icons-material/Restore';
 import UndoIcon from '@mui/icons-material/Undo';
 import PaletteIcon from '@mui/icons-material/Palette';
+import LockIcon from '@mui/icons-material/Lock';
+import LockOpenIcon from '@mui/icons-material/LockOpen';
+import LockClockIcon from '@mui/icons-material/LockClock';
+import OpenWithIcon from '@mui/icons-material/OpenWith';
 import DistrictFlow from './DistrictFlow';
+import Alert from '@mui/material/Alert';
+import WifiOffIcon from '@mui/icons-material/WifiOff';
+import ToggleOnIcon from '@mui/icons-material/ToggleOn';
+import ToggleOffIcon from '@mui/icons-material/ToggleOff';
 
 const COLOR_PRESETS = [
   { label: 'Azul', value: '#3b82f6' },
@@ -31,7 +40,7 @@ const COLOR_PRESETS = [
 ];
 
 export default function DistrictMap() {
-  const { tanques, loading } = useTanques();
+  const { tanques, loading, error } = useTanques();
   try { console.debug('[DISTRICT DEBUG] useTanques returned:', Array.isArray(tanques) ? tanques.length : typeof tanques); } catch (e) {}
   try { console.debug('[DISTRICT DEBUG] STATIC_NODES count:', Array.isArray(STATIC_NODES) ? STATIC_NODES.length : typeof STATIC_NODES); } catch (e) {}
   const [scale, setScale] = useState(1);
@@ -53,7 +62,23 @@ export default function DistrictMap() {
   const [connectionStrokeColor, setConnectionStrokeColor] = useState('#000000');
   const [connectionLabel, setConnectionLabel] = useState('');
   const [snack, setSnack] = useState({ open: false, msg: '' });
-  const [edgeLineType, setEdgeLineType] = useState('straight');
+  const [edgeLineType, setEdgeLineType] = useState(() => {
+    try { return localStorage.getItem('district_edge_line_type') || 'straight'; } catch (e) { return 'straight'; }
+  });
+  // Modo diagrama: 'edit' = arrastrables | 'view' = solo visual
+  const [diagramMode, setDiagramMode] = useState(() => {
+    try { return localStorage.getItem('district_diagram_mode') || 'view'; } catch (e) { return 'view'; }
+  });
+
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(() => {
+    try { return localStorage.getItem('district_autosave') === '1'; } catch (e) { return false; }
+  });
+  const [diagramLocked, setDiagramLocked] = useState(() => {
+    try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; }
+  });
+  const [unsavedChanges, setUnsavedChanges] = useState(false);
+  // Error de conexión: ocultar si el usuario lo cierra manualmente
+  const [errorDismissed, setErrorDismissed] = useState(false);
 
   useEffect(() => {
     try {
@@ -78,6 +103,55 @@ export default function DistrictMap() {
 
   const catalog = useMemo(() => loadCatalog(), []);
   const mergedTanques = useMemo(() => mergeApiTanquesWithCatalog(tanques || [], catalog), [tanques, catalog]);
+  // Manual mapping persisted in localStorage under key 'district_manual_node_mapping'
+  const [manualMappingVersion, setManualMappingVersion] = useState(0);
+  const MANUAL_MAPPING_KEY = 'district_manual_node_mapping';
+  const loadManualMappingFromLocal = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(MANUAL_MAPPING_KEY) || '{}';
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) { return {}; }
+  }, []);
+
+  const [serverManualMapping, setServerManualMapping] = useState(null);
+  // compose manual mapping: server override -> local override -> defaults
+  const manualMapping = useMemo(() => {
+    // Mapeo explícito por tag de API para los 7 tanques que deben actualizarse dinámicamente.
+    // Estos tags coinciden exactamente con los devueltos por /api/tanques.
+    const defaults = {
+      'tanque-belen-aurora':     { tag: 'NIVEL_AURORA' },
+      'tanque-zona-industrial':  { tag: 'NIVEL_DE_ZONA_INDUSTRIAL' },
+      'tanque-calucaima':        { tag: 'NIVEL_CALUCAIMA' },
+      'tanque-interlaken':       { tag: 'NIVEL_INTERLAKEN' },
+      'tanque-miramar':          { tag: 'NIVEL_MIRAMAR' },
+      'tanque-piedra-pintada-1': { tag: 'NIVEL_PIEDRA_PINTADA_1' },
+      'tanque-piedra-pintada-2': { tag: 'NIVEL_PIEDRA_PINTADA_2' },
+    };
+    const local = loadManualMappingFromLocal() || {};
+    const server = serverManualMapping || {};
+    return { ...defaults, ...local, ...server };
+  }, [loadManualMappingFromLocal, serverManualMapping, manualMappingVersion]);
+  // Nodes to explicitly exclude from mapping
+  const EXCLUDED_NODE_IDS = useMemo(() => new Set(['tanque-elevado', 'tanque-semienterrado']), []);
+
+  // Mapping UI state
+  const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
+  const [mappingDraft, setMappingDraft] = useState({});
+
+  // load server mapping on mount
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const state = await diagramService.getState();
+        if (!mounted) return;
+        const mapped = state && state.manual_node_mapping ? state.manual_node_mapping : null;
+        setServerManualMapping(mapped);
+      } catch (e) { /* ignore */ }
+    })();
+    return () => { mounted = false; };
+  }, []);
   // compute display percentages and status counts
   const summary = useMemo(() => {
     const stats = { total: 0, normal: 0, atencion: 0, critico: 0, sinDatos: 0 };
@@ -100,7 +174,7 @@ export default function DistrictMap() {
     let persisted = {};
     try { persisted = JSON.parse(localStorage.getItem('district_state') || '{}').nodes || {}; } catch (e) { persisted = {}; }
 
-    const baseNodes = STATIC_NODES.map((node) => {
+      const baseNodes = STATIC_NODES.map((node) => {
       if (node.type === 'plant' || node.type === 'district') {
         return {
           ...node,
@@ -108,7 +182,23 @@ export default function DistrictMap() {
         };
       }
 
-      const matchedTank = (mergedTanques || []).find((tank) => {
+      // If this node is explicitly excluded, don't attempt any mapping
+      if (EXCLUDED_NODE_IDS.has(node.id)) {
+        const savedEntryEx = persisted && persisted[node.id] && typeof persisted[node.id] === 'object' ? persisted[node.id] : null;
+        const customFromSavedEx = savedEntryEx && (savedEntryEx.customName || savedEntryEx.displayName || savedEntryEx.diagramName) ? (savedEntryEx.customName || savedEntryEx.displayName || savedEntryEx.diagramName) : null;
+        return { ...node, data: { display_name: node.label, __excluded: true, ...(customFromSavedEx ? { customName: customFromSavedEx } : {}) } };
+      }
+
+      // First check manual mapping entries
+      let mappedByManual = null;
+      try {
+        const mapping = manualMapping[node.id];
+        if (mapping && (mapping.id || mapping.tag)) {
+          mappedByManual = (mergedTanques || []).find((t) => (mapping.id && Number(t.id) === Number(mapping.id)) || (mapping.tag && String(t.tag) === String(mapping.tag)));
+        }
+      } catch (e) { mappedByManual = null; }
+
+      const matchedTank = mappedByManual || (mergedTanques || []).find((tank) => {
         if (!tank) return false;
         const candidates = [
           tank.id != null ? String(tank.id) : '',
@@ -123,22 +213,25 @@ export default function DistrictMap() {
         return candidates.some((candidate) => labelCandidates.some((labelCandidate) => candidate === labelCandidate || candidate.includes(labelCandidate) || labelCandidate.includes(candidate)));
       });
 
+      // Special-case mapping: prefer manual mapping, otherwise fuzzy match as fallback
+      let finalMatched = matchedTank || null;
+
       const savedEntry = persisted && persisted[node.id] && typeof persisted[node.id] === 'object' ? persisted[node.id] : null;
       const customFromSaved = savedEntry && (savedEntry.customName || savedEntry.displayName || savedEntry.diagramName) ? (savedEntry.customName || savedEntry.displayName || savedEntry.diagramName) : null;
 
       return {
         ...node,
-        data: matchedTank
-          ? { ...matchedTank, _api_id: matchedTank.id, display_name: node.label, ...(customFromSaved ? { customName: customFromSaved } : {}) }
+        data: finalMatched || matchedTank
+          ? { ...((finalMatched && finalMatched) || matchedTank), _api_id: ((finalMatched && finalMatched.id) || (matchedTank && matchedTank.id)), display_name: node.label, ...(customFromSaved ? { customName: customFromSaved } : {}) }
           : { display_name: node.label, __placeholder: true, ...(customFromSaved ? { customName: customFromSaved } : {}) },
       };
     });
 
     return {
       nodes: baseNodes,
-      resolvedConnections: STATIC_CONNECTIONS.map((c) => ({ id: `${c.from}-${c.to}`, from: c.from, to: c.to, label: c.label })),
+      resolvedConnections: STATIC_CONNECTIONS.map((c) => ({ id: `${c.from}-${c.to}`, from: c.from, to: c.to, label: (c.label && String(c.label).trim().toLowerCase() === 'salida') ? '' : c.label })),
     };
-  }, [mergedTanques]);
+  }, [mergedTanques, manualMapping, EXCLUDED_NODE_IDS]);
   const containerRef = useRef(null);
   const flowRef = useRef(null);
   const [flowOn, setFlowOn] = useState(false);
@@ -156,6 +249,26 @@ export default function DistrictMap() {
       if (flowRef.current && flowRef.current.getShowFlow) setFlowOn(!!flowRef.current.getShowFlow());
     } catch (e) {}
   }, []);
+
+  // Warn user if there are unsaved changes and they attempt to close/reload the page
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (!unsavedChanges) return undefined;
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [unsavedChanges]);
+
+  // Apply stored autosave preference to Flow on mount / when ref becomes available
+  useEffect(() => {
+    try {
+      if (!flowRef.current) return;
+      if (autoSaveEnabled) flowRef.current?.startAutoSave?.(); else flowRef.current?.stopAutoSave?.();
+    } catch (e) { console.warn('apply autosave preference error', e); }
+  }, [autoSaveEnabled]);
 
   const pickNodeById = (id) => (nodes || []).find(n => n.id === id) || null;
   const selectedNode = selectedId ? pickNodeById(selectedId) : null;
@@ -227,6 +340,20 @@ export default function DistrictMap() {
               <div style={{ fontSize: 12, color: '#64748b' }}>Tanques</div>
               <div style={{ fontWeight: 800, fontSize: 18 }}>{summary.total}</div>
             </Box>
+
+            <Box sx={{ ml: 'auto' }}>
+              <Button size="small" variant="outlined" onClick={() => {
+                // prepare draft mapping for unmapped nodes
+                try {
+                  const current = loadManualMapping();
+                  const unmapped = (nodes || []).filter(n => n.type === 'tank' && !EXCLUDED_NODE_IDS.has(n.id) && !(current && current[n.id]));
+                  const draft = {};
+                  unmapped.forEach(n => { draft[n.id] = current && current[n.id] ? current[n.id] : null; });
+                  setMappingDraft(draft);
+                } catch (e) { setMappingDraft({}); }
+                setMappingDialogOpen(true);
+              }}>Mapear nodos sin mapear</Button>
+            </Box>
             <Box sx={{ p: 1, bgcolor: '#ffffff', borderRadius: 1, boxShadow: 1, display: 'flex', gap: 2 }}>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 11, color: '#64748b' }}>Normal</div>
@@ -297,6 +424,30 @@ export default function DistrictMap() {
             <Button size="small" variant={filterState === 'critico' ? 'contained' : 'outlined'} onClick={() => setFilterState('critico')}>Crítico</Button>
             <Button size="small" variant={filterState === 'sin-datos' ? 'contained' : 'outlined'} onClick={() => setFilterState('sin-datos')}>Sin datos</Button>
             <Button size="small" startIcon={editMode ? <DoneIcon /> : <EditIcon />} variant={editMode ? 'contained' : 'outlined'} sx={{ ml: 1 }} onClick={() => setEditMode(e => !e)}>{editMode ? 'Finalizar edición' : 'Editar diagrama'}</Button>
+            {/* Bloquear / Permitir modificar (junto a Editar) */}
+            {diagramLocked ? (
+              <Button size="small" startIcon={<LockIcon />} variant="contained" color="secondary" sx={{ ml: 1 }} onClick={() => {
+                try {
+                  // Unlock: allow editing
+                  flowRef.current?.editUnlockAllNodes?.();
+                  setDiagramLocked(false);
+                  try { localStorage.setItem('district_locked', '0'); } catch (e) {}
+                  setSnack({ open: true, msg: 'Diagrama desbloqueado' });
+                } catch (e) { console.warn(e); }
+              }}>Desbloquear</Button>
+            ) : (
+              <Button size="small" startIcon={<LockClockIcon />} variant="outlined" color="warning" sx={{ ml: 1 }} onClick={() => {
+                try {
+                  // Lock: save and fix positions, prevent further moves
+                  flowRef.current?.saveAndLockAllNodes?.();
+                  flowRef.current?.doSave?.();
+                  setDiagramLocked(true);
+                  setDiagramMode('view');
+                  try { localStorage.setItem('district_locked', '1'); } catch (e) {}
+                  setSnack({ open: true, msg: 'Diagrama guardado y bloqueado' });
+                } catch (e) { console.warn(e); }
+              }}>Bloquear</Button>
+            )}
           </Box>
         </Box>
 
@@ -327,11 +478,21 @@ export default function DistrictMap() {
                 { value: 'default', label: 'Curva', icon: '⌒' },
                 { value: 'smoothstep', label: 'Suave', icon: '⌣' },
                 { value: 'step', label: 'Escalón', icon: '⌐' },
-              ].map(opt => (
+                ].map(opt => (
                 <button
                   key={opt.value}
                   title={opt.label}
-                  onClick={() => { setEdgeLineType(opt.value); flowRef.current?.setDefaultEdgeType?.(opt.value); }}
+                  onClick={() => {
+                    setEdgeLineType(opt.value);
+                    try { localStorage.setItem('district_edge_line_type', opt.value); } catch(e){}
+                    // Si hay una conexión seleccionada, cambiar sólo esa arista.
+                    if (selectedEdgeId) {
+                      flowRef.current?.updateEdgeType?.(selectedEdgeId, opt.value);
+                    } else {
+                      // Si no hay selección, cambiar el tipo por defecto para nuevas conexiones
+                      flowRef.current?.setDefaultEdgeType?.(opt.value);
+                    }
+                  }}
                   style={{
                     padding: '2px 8px',
                     borderRadius: 5,
@@ -474,17 +635,125 @@ export default function DistrictMap() {
               />
             </Box>
 
-            <Button size="small" startIcon={<SaveIcon />} variant="contained" color="primary" onClick={() => { flowRef.current?.doSave(); }}>Guardar</Button>
+            {/* Divisor visual */}
+            <Box sx={{ width: '1px', height: 28, bgcolor: '#cbd5e1', mx: 0.5 }} />
+
+            {/* ── Botones de modo diagrama ── */}
+            <Tooltip title="Activar modo edición: arrastra los tanques libremente">
+              <Button
+                size="small"
+                startIcon={<OpenWithIcon />}
+                variant={diagramMode === 'edit' ? 'contained' : 'outlined'}
+                color="success"
+                onClick={() => {
+                  flowRef.current?.editUnlockAllNodes?.();
+                  setDiagramMode('edit');
+                  try { localStorage.setItem('district_diagram_mode', 'edit'); } catch (e) {}
+                }}
+                sx={{ fontWeight: 700, minWidth: 80 }}
+              >
+                Mover
+              </Button>
+            </Tooltip>
+
+            <Tooltip title="Guardar posiciones del diagrama">
+              <Button
+                size="small"
+                startIcon={<SaveIcon />}
+                variant="contained"
+                color="primary"
+                onClick={() => {
+                  flowRef.current?.saveAndLockAllNodes?.();
+                  flowRef.current?.doSave?.();
+                  setSnack({ open: true, msg: '✓ Diagrama guardado' });
+                }}
+                sx={{ fontWeight: 700, minWidth: 90 }}
+              >
+                Guardar
+              </Button>
+            </Tooltip>
+
+            <Tooltip title={autoSaveEnabled ? 'Autosave activado' : 'Autosave desactivado'}>
+              <Button
+                size="small"
+                startIcon={autoSaveEnabled ? <ToggleOnIcon /> : <ToggleOffIcon />}
+                variant={autoSaveEnabled ? 'contained' : 'outlined'}
+                color={autoSaveEnabled ? 'success' : 'inherit'}
+                onClick={() => {
+                  try {
+                    const next = !autoSaveEnabled;
+                    setAutoSaveEnabled(next);
+                    try { localStorage.setItem('district_autosave', next ? '1' : '0'); } catch (e) {}
+                    if (next) {
+                      flowRef.current?.startAutoSave?.();
+                      setSnack({ open: true, msg: 'Autosave ON' });
+                    } else {
+                      flowRef.current?.stopAutoSave?.();
+                      setSnack({ open: true, msg: 'Autosave OFF' });
+                    }
+                  } catch (e) { console.warn('toggle autosave error', e); }
+                }}
+                sx={{ fontWeight: 700, minWidth: 120, ml: 1 }}
+              >
+                Autosave
+              </Button>
+            </Tooltip>
+            {unsavedChanges ? (
+              <div style={{ marginLeft: 10, padding: '6px 8px', background: '#fff7ed', color: '#92400e', border: '1px solid #f59e0b', borderRadius: 6, fontWeight: 700, fontSize: 12 }}>Cambios no guardados</div>
+            ) : (
+              <div style={{ marginLeft: 10, padding: '6px 8px', background: '#f0fdf4', color: '#065f46', border: '1px solid #86efac', borderRadius: 6, fontWeight: 700, fontSize: 12 }}>Sin cambios</div>
+            )}
+
+            <Tooltip title="Modo solo visual: bloquea el diagrama, no se puede mover nada">
+              <Button
+                size="small"
+                startIcon={<LockIcon />}
+                variant={diagramMode === 'view' ? 'contained' : 'outlined'}
+                color="secondary"
+                onClick={() => {
+                  flowRef.current?.saveAndLockAllNodes?.();
+                  setDiagramMode('view');
+                  try { localStorage.setItem('district_diagram_mode', 'view'); } catch (e) {}
+                  setSnack({ open: true, msg: '🔒 Modo solo visual activado' });
+                }}
+                sx={{ fontWeight: 700, minWidth: 110 }}
+              >
+                Solo visual
+              </Button>
+            </Tooltip>
+
             <Button size="small" startIcon={<RestoreIcon />} onClick={() => { flowRef.current?.doRestoreInitial(); }}>Restaurar</Button>
             <Button size="small" startIcon={<UndoIcon />} onClick={() => { flowRef.current?.doUndo(); }}>Deshacer</Button>
           </Box>
         ) : null}
 
         <Box sx={{ width: '100%', height: '72vh', overflow: 'hidden', position: 'relative' }}>
+          {/* Banner de error de conexión — discreto y colapsable */}
+          {(error && !errorDismissed) ? (
+            <Box sx={{
+              position: 'absolute', bottom: 56, right: 12, zIndex: 250,
+              display: 'flex', alignItems: 'center', gap: 1,
+              background: 'rgba(30,41,59,0.88)', color: '#fbbf24',
+              px: 1.5, py: 0.8, borderRadius: 2,
+              fontSize: 12, fontWeight: 600,
+              boxShadow: '0 2px 10px rgba(0,0,0,0.25)',
+              border: '1px solid rgba(251,191,36,0.3)',
+              backdropFilter: 'blur(4px)',
+            }}>
+              <WifiOffIcon sx={{ fontSize: 15, color: '#fbbf24' }} />
+              <span>Sin conexión IBAL — datos no disponibles</span>
+              <button
+                type="button"
+                onClick={() => setErrorDismissed(true)}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', marginLeft: 4 }}
+                title="Cerrar"
+              >✕</button>
+            </Box>
+          ) : null}
           {/* Ensure we always pass at least the STATIC_NODES as fallback so the map shows even if API data is missing */}
           {(() => {
             try { console.debug('[DISTRICT DEBUG] Passing nodesTo DistrictFlow count:', flowNodes.length, flowNodes.map(n => n.id)); } catch (e) {}
-            return <DistrictFlow ref={flowRef} initialNodes={flowNodes} initialEdges={resolvedConnections} onNodeSelect={(id) => { setSelectedId(id); setSelectedEdgeId(null); }} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} />;
+            return <DistrictFlow ref={flowRef} initialNodes={flowNodes} initialEdges={resolvedConnections} apiError={Boolean(error)} onNodeSelect={(id) => { setSelectedId(id); setSelectedEdgeId(null); }} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />;
           })()}
           {tooltip ? (
             <Box sx={{ position: 'absolute', pointerEvents: 'none', left: tooltip.x - (containerRef.current?.getBoundingClientRect().left || 0) + 8, top: tooltip.y - (containerRef.current?.getBoundingClientRect().top || 0) + 8, background: 'white', p: 1, borderRadius: 1, boxShadow: 2, fontSize: 12 }}>
@@ -493,6 +762,57 @@ export default function DistrictMap() {
           ) : null}
         </Box>
       </Paper>
+
+      <Dialog open={mappingDialogOpen} onClose={() => setMappingDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Mapear nodos manualmente</DialogTitle>
+        <DialogContent>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {(Object.keys(mappingDraft || {}) || []).length === 0 ? (
+              <div>No hay nodos sin mapear o ya fueron mapeados.</div>
+            ) : (
+              Object.keys(mappingDraft).map((nid) => {
+                const node = (nodes || []).find(x => x.id === nid) || { id: nid, label: nid };
+                return (
+                  <div key={nid} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ width: 220, fontWeight: 700 }}>{node.label || nid}</div>
+                    <Autocomplete
+                      sx={{ flex: 1 }}
+                      options={(mergedTanques || []).map(t => ({ id: t.id, tag: t.tag, label: `${t.display_name || t.nombre} (${t.tag || t.id})` }))}
+                      value={mappingDraft[nid] ? { id: mappingDraft[nid].id, tag: mappingDraft[nid].tag, label: `${mappingDraft[nid].tag || mappingDraft[nid].id}` } : null}
+                      onChange={(e, v) => {
+                        setMappingDraft(d => ({ ...d, [nid]: v ? { id: v.id, tag: v.tag } : null }));
+                      }}
+                      renderInput={(params) => <TextField {...params} label="Seleccionar tanque IBAL (tag/id)" />}
+                    />
+                    <Button size="small" color="secondary" onClick={() => setMappingDraft(d => ({ ...d, [nid]: null }))}>Limpiar</Button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMappingDialogOpen(false)}>Cancelar</Button>
+          <Button variant="contained" onClick={async () => {
+            try {
+              // persist locally
+              const currentLocal = loadManualMappingFromLocal() || {};
+              const mergedLocal = { ...currentLocal };
+              Object.entries(mappingDraft || {}).forEach(([k, v]) => { if (v && (v.id || v.tag)) mergedLocal[k] = v; else delete mergedLocal[k]; });
+              localStorage.setItem(MANUAL_MAPPING_KEY, JSON.stringify(mergedLocal));
+              // persist to server: merge into server state under `manual_node_mapping`
+              const serverState = await diagramService.getState();
+              const serverMapping = serverState && serverState.manual_node_mapping ? serverState.manual_node_mapping : {};
+              const mergedServer = { ...serverMapping, ...mergedLocal };
+              const newState = { ...(serverState || {}), manual_node_mapping: mergedServer };
+              await diagramService.saveState(newState);
+              setServerManualMapping(mergedServer);
+              setManualMappingVersion(v => v + 1);
+            } catch (e) { console.warn('No se pudo guardar mapping en servidor', e); }
+            setMappingDialogOpen(false);
+          }}>Guardar mapeo</Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar
         open={snack.open}

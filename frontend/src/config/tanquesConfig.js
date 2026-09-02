@@ -211,7 +211,7 @@ const TANQUES_CONFIG = [
     area: 1476,
     altura_total: 3.96,
     altura_rebose: 3.01,
-    altura_rebose_calibrada: 6.6551724138,
+    altura_rebose_calibrada: 3.01,
     volumen: 6100,
     largo: null,
     ancho: null,

@@ -35,9 +35,22 @@ export function normalizeSavedEdge(edge, defaults = {}) {
   if (normalized.style && !normalized.style.strokeLinecap) {
     normalized.style = { ...normalized.style, strokeLinecap: 'round' };
   }
-  // Siempre forzar tipo straight (líneas rectas sin routing)
-  normalized.type = 'straight';
+  // Usar el tipo guardado en el edge si existe y es válido, luego el default, y como fallback 'straight'
+  const validEdgeTypes = new Set(['straight', 'default', 'smoothstep', 'step']);
+  if (normalized.type && validEdgeTypes.has(normalized.type)) {
+    // mantener el tipo guardado
+  } else if (defaults.type && validEdgeTypes.has(defaults.type)) {
+    normalized.type = defaults.type;
+  } else {
+    normalized.type = 'straight';
+  }
   if (normalized.animated == null) normalized.animated = Boolean(defaults.animated);
+
+  // Remove legacy textual labels like "salida" — keep label only when meaningful
+  if (normalized.label && typeof normalized.label === 'string') {
+    const l = normalized.label.trim().toLowerCase();
+    if (l === 'salida' || l === 'salida ' || l === ' salida') normalized.label = '';
+  }
 
   return normalized;
 }

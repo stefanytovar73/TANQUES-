@@ -2669,17 +2669,17 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               customName,
               nameLocked,
               label,
-                // Capture exact runtime positions from React Flow when available
-                const savedState = readDiagramState();
-                const runtimeNodes = (rfInstance && typeof rfInstance.getNodes === 'function') ? rfInstance.getNodes() : (nodesRef.current || []);
-                const saved = {
-                  ...savedState,
-                  nodes: Object.fromEntries((runtimeNodes || []).map(n => {
-                    const prev = savedState.nodes && savedState.nodes[n.id] && typeof savedState.nodes[n.id] === 'object' ? savedState.nodes[n.id] : {};
-                    return [n.id, getPersistedNodeEntry(n, prev)];
-                  })),
-                  edges: edgesRef.current || [],
-                };
+              data: { ...rawNode, customName, nameLocked, label, nodeData: finalNodeData },
+            };
+          });
+
+        const mergedNodesMap = new Map((mergedNodes || []).map(n => [n.id, n]));
+
+        // Add any saved nodes that are not present in the API's list
+        for (const [savedId, entry] of Object.entries(saved.nodes || {})) {
+          if (!savedId) continue;
+          if (deletedIds.includes(savedId)) continue;
+          if (mergedNodesMap.has(savedId)) continue;
           try {
             const persistedVisual = sanitizePersistedNodeVisual(entry);
             const rawPosition = { x: Number(persistedVisual.x || 0), y: Number(persistedVisual.y || 0) };

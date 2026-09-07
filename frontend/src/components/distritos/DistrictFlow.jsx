@@ -248,13 +248,36 @@ async function loadFlowMetricForNodeId(nodeId) {
   }
 }
 
+function getCalibratedReboseHeight(source = {}) {
+  const candidates = [
+    source.tag,
+    source.nombre,
+    source.display_name,
+    source.apiName,
+    source.originalName,
+    source.label,
+    source.name,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const normalized = String(candidate).trim().toUpperCase();
+    if (normalized === 'CALUCAIMA') return 5.02;
+    if (normalized === 'ZONA INDUSTRIAL') return 16.6;
+    if (normalized === 'MIRAMAR') return 7.56;
+  }
+
+  return null;
+}
+
 function enrichTankNodeMetrics(data = {}) {
   const source = { ...(data || {}) };
   const nivel = source.valor_m ?? source.nivel ?? source.valor ?? source.level ?? source.level_m ?? null;
   const nivelNumber = Number.isFinite(Number(nivel)) ? Number(nivel) : null;
 
-  // La API IBAL puede devolver altura_rebose_m (con _m) o altura_rebose
-  const resolvedHeight = source.altura_rebose ?? source.altura_rebose_m ?? source.alturaRebose ?? null;
+  // La API IBAL puede devolver altura_rebose_m (con _m) o altura_rebose.
+  // Cuando falte esa altura para los tanques calibrados, usar la referencia matemática del catálogo.
+  const calibratedFallbackHeight = getCalibratedReboseHeight(source);
+  const resolvedHeight = source.altura_rebose ?? source.altura_rebose_m ?? source.alturaRebose ?? calibratedFallbackHeight ?? null;
   const heightNumber = resolvedHeight != null && Number.isFinite(Number(resolvedHeight)) ? Number(resolvedHeight) : null;
 
   // La API IBAL devuelve porcentaje_capacidad (no porcentaje).
@@ -267,13 +290,11 @@ function enrichTankNodeMetrics(data = {}) {
   const isBadQuality = source.calidad === 'DUDOSA' || source.sin_datos === true;
   let percentage = null;
   if (!isBadQuality) {
-    if (nivelNumber != null && heightNumber != null && heightNumber > 0) {
-      // La altura_rebose ya viene calibrada desde mergeTankWithCatalog (catálogo > API)
-      percentage = calculateDisplayPorcentaje({ ...source, valor_m: nivelNumber, altura_rebose: heightNumber });
-    }
-    // Si el cálculo por nivel/altura falló, usar el porcentaje que provee IBAL directamente
-    if (percentage == null && ibalPct != null) {
+    if (ibalPct != null) {
       percentage = ibalPct;
+    } else if (nivelNumber != null && heightNumber != null && heightNumber > 0) {
+      // Calcular dinámicamente desde valor_m y altura de rebose.
+      percentage = calculateDisplayPorcentaje({ ...source, valor_m: nivelNumber, altura_rebose: heightNumber });
     }
   }
 
@@ -1267,10 +1288,68 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     }
   }, []);
 
+  const readAuthoritativeDiagramState = useCallback(async () => {
+    try {
+      const remote = await diagramService.getState();
+      const remoteHasState = !!(
+        remote &&
+        typeof remote === 'object' &&
+        (
+          (remote.nodes && typeof remote.nodes === 'object' && Object.keys(remote.nodes).length > 0) ||
+          (Array.isArray(remote.edges) && remote.edges.length > 0)
+        )
+      );
+      if (!remoteHasState) return readDiagramState();
+
+      const normalized = { ...remote };
+      normalized.nodes = normalized.nodes && typeof normalized.nodes === 'object'
+        ? Object.fromEntries(Object.entries(normalized.nodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)]))
+        : {};
+      normalized.hiddenNodeIds = Array.isArray(normalized.hiddenNodeIds) ? [...new Set(normalized.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
+      normalized.deletedNodeIds = Array.isArray(normalized.deletedNodeIds) ? [...new Set(normalized.deletedNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
+      try { localStorage.setItem('district_state', JSON.stringify(normalized)); } catch (e) {}
+      return normalized;
+    } catch (e) {
+      return readDiagramState();
+    }
+  }, [readDiagramState]);
+
+  const _validateBeforeSave = (candidate, baseline) => {
+    try {
+      const candNodes = candidate && candidate.nodes && typeof candidate.nodes === 'object' ? Object.keys(candidate.nodes).length : 0;
+      const baseNodes = baseline && baseline.nodes && typeof baseline.nodes === 'object' ? Object.keys(baseline.nodes).length : 0;
+      if (baseNodes >= 59 && candNodes < baseNodes) {
+        console.warn('[DIAGRAM] Validation failed: candidate node count is less than baseline', candNodes, '<', baseNodes);
+        return false;
+      }
+      // ensure nodes have positions
+      if (candidate && candidate.nodes && typeof candidate.nodes === 'object') {
+        for (const [id, n] of Object.entries(candidate.nodes)) {
+          if (n == null) continue;
+          const hasPos = (typeof n.x === 'number' || (n.position && typeof n.position.x === 'number')) && (typeof n.y === 'number' || (n.position && typeof n.position.y === 'number'));
+          if (!hasPos) {
+            console.warn('[DIAGRAM] Validation failed: node missing position for', id);
+            return false;
+          }
+        }
+      }
+      // edges must be array
+      if (candidate && candidate.edges && !Array.isArray(candidate.edges)) {
+        console.warn('[DIAGRAM] Validation failed: edges not an array');
+        return false;
+      }
+      return true;
+    } catch (e) { return false; }
+  };
+
+  // Serialized debounced save: keep only the latest pending state and ensure
+  // only one server request runs at a time. Maintain a local backup before
+  // overwriting server state. localStorage is only cache; React Flow is
+  // source of truth for state passed into this function.
+  const savingRef = useRef(false);
   const writeDiagramState = useCallback((nextState) => {
     try {
       const safe = nextState && typeof nextState === 'object' ? nextState : {};
-      // stamp with client-side time to help ordering; server will add authoritative updated_at
       try { safe._updatedAt = new Date().toISOString(); } catch (e) { /* ignore */ }
       safe.hiddenNodeIds = Array.isArray(safe.hiddenNodeIds) ? [...new Set(safe.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
       safe.deletedNodeIds = Array.isArray(safe.deletedNodeIds) ? [...new Set(safe.deletedNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
@@ -1279,61 +1358,85 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           Object.entries(safe.nodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)])
         );
       }
-      localStorage.setItem('district_state', JSON.stringify(safe));
+
+      // Validate against local baseline only (do not fetch remote state here).
       try {
-        console.log('[DIAGRAM] writeDiagramState: local saved _updatedAt=', safe._updatedAt);
-        // Debounced server save: coalesce frequent local changes and apply exponential backoff on failures
-        try {
-          pendingServerSaveRef.current = safe;
-          // clear any scheduled backoff retry (we'll schedule fresh)
-          try { if (serverBackoffRef.current.timeoutId) { clearTimeout(serverBackoffRef.current.timeoutId); serverBackoffRef.current.timeoutId = null; } } catch (e) {}
-          if (serverSaveTimerRef.current) { clearTimeout(serverSaveTimerRef.current); serverSaveTimerRef.current = null; }
-          serverSaveTimerRef.current = setTimeout(() => {
-            const attemptServerSave = async () => {
-              const payload = pendingServerSaveRef.current;
-              if (!payload) return;
-              try {
-                await diagramService.saveState(payload);
-                console.log('[DIAGRAM] saved to server');
-                pendingServerSaveRef.current = null;
-                serverBackoffRef.current.attempts = 0;
-              } catch (err) {
-                serverBackoffRef.current.attempts = (serverBackoffRef.current.attempts || 0) + 1;
-                const attempt = Math.min(serverBackoffRef.current.attempts, 6);
-                const delay = Math.min(30000, Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 1000));
-                console.warn('[DIAGRAM] save to server failed, scheduling retry in', delay, 'ms', err && err.message);
-                try { if (serverBackoffRef.current.timeoutId) clearTimeout(serverBackoffRef.current.timeoutId); } catch (e) {}
-                serverBackoffRef.current.timeoutId = setTimeout(() => { serverSaveTimerRef.current = setTimeout(attemptServerSave, 0); }, delay);
-              }
-            };
-            // run first attempt immediately
-            serverSaveTimerRef.current = null;
-            attemptServerSave();
-          }, 1500);
-        } catch (e) { console.warn('[DIAGRAM] scheduling server save failed', e && e.message); }
-        try {
-          const msg = JSON.stringify({ type: 'diagram:update', updated_at: safe._updatedAt || new Date().toISOString(), state: safe });
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            console.log('[WS CLIENT] sending diagram:update', safe._updatedAt);
-            try { wsRef.current.send(msg); } catch (e) { console.warn('[WS CLIENT] send failed', e && e.message); }
-          } else {
-            // enqueue for later send, cap queue to avoid unbounded growth
-            try {
-              sendQueueRef.current = sendQueueRef.current || [];
-              sendQueueRef.current.push(msg);
-              if (sendQueueRef.current.length > SEND_QUEUE_MAX) {
-                // drop oldest message(s)
-                const dropped = sendQueueRef.current.length - SEND_QUEUE_MAX;
-                sendQueueRef.current.splice(0, dropped);
-                console.warn('[WS CLIENT] send queue exceeded max; dropped', dropped, 'oldest messages');
-              }
-              try { localStorage.setItem('district_ws_queue', JSON.stringify(sendQueueRef.current)); } catch (e) {}
-              console.log('[WS CLIENT] socket not open, queued message (queue size=', sendQueueRef.current.length, ')');
-            } catch (e) { console.warn('[WS CLIENT] enqueue failed', e && e.message); }
+        const baseline = readDiagramState();
+        if (!_validateBeforeSave(safe, baseline)) {
+          console.warn('[DIAGRAM] Aborting server save: payload failed validation');
+          try { localStorage.setItem('district_state', JSON.stringify(safe)); } catch (e) {}
+          try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
+          return;
+        }
+      } catch (e) { /* proceed conservatively */ }
+
+      // write local cache and keep a backup of previous cached state
+      try {
+        const prevRaw = (function() { try { return JSON.parse(localStorage.getItem('district_state') || '{}'); } catch (e) { return {}; } })();
+        try { localStorage.setItem('district_state_backup', JSON.stringify(prevRaw)); } catch (e) {}
+        try { localStorage.setItem('district_state', JSON.stringify(safe)); } catch (e) {}
+      } catch (e) {}
+
+      console.log('[DIAGRAM] writeDiagramState: local saved _updatedAt=', safe._updatedAt);
+
+      // Set latest pending payload and schedule debounced processing
+      pendingServerSaveRef.current = safe;
+      // clear any existing timer
+      try { if (serverSaveTimerRef.current) { clearTimeout(serverSaveTimerRef.current); serverSaveTimerRef.current = null; } } catch (e) {}
+
+      const processPending = async () => {
+        if (savingRef.current) return; // already running
+        savingRef.current = true;
+        // reset backoff attempts only on explicit start of processing
+        serverBackoffRef.current.attempts = serverBackoffRef.current.attempts || 0;
+        while (pendingServerSaveRef.current) {
+          const payload = pendingServerSaveRef.current;
+          // capture latest and clear so new updates can arrive
+          pendingServerSaveRef.current = null;
+          try {
+            await diagramService.saveState(payload);
+            console.log('[DIAGRAM] saved to server');
+            serverBackoffRef.current.attempts = 0;
+            try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
+          } catch (err) {
+            // on failure, restore payload as pending and schedule retry with backoff
+            serverBackoffRef.current.attempts = (serverBackoffRef.current.attempts || 0) + 1;
+            const attempt = Math.min(serverBackoffRef.current.attempts, 6);
+            const delay = Math.min(30000, Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 1000));
+            console.warn('[DIAGRAM] save to server failed, scheduling retry in', delay, 'ms', err && err.message);
+            pendingServerSaveRef.current = payload;
+            try { if (serverBackoffRef.current.timeoutId) clearTimeout(serverBackoffRef.current.timeoutId); } catch (e) {}
+            serverBackoffRef.current.timeoutId = setTimeout(() => {
+              serverBackoffRef.current.timeoutId = null;
+              processPending();
+            }, delay);
+            break; // exit loop; retry will re-enter
           }
-        } catch (e) { console.error('[WS CLIENT] send error', e && e.message); }
-      } catch (e) { console.error('[DIAGRAM] writeDiagramState error', e && e.message); }
-    } catch (e) {}
+        }
+        savingRef.current = false;
+      };
+
+      serverSaveTimerRef.current = setTimeout(() => { processPending(); serverSaveTimerRef.current = null; }, 800);
+
+      // WebSocket notification (best-effort); keep queue behavior
+      try {
+        const msg = JSON.stringify({ type: 'diagram:update', updated_at: safe._updatedAt || new Date().toISOString(), state: safe });
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          try { wsRef.current.send(msg); } catch (e) { console.warn('[WS CLIENT] send failed', e && e.message); }
+        } else {
+          try {
+            sendQueueRef.current = sendQueueRef.current || [];
+            sendQueueRef.current.push(msg);
+            if (sendQueueRef.current.length > SEND_QUEUE_MAX) {
+              const dropped = sendQueueRef.current.length - SEND_QUEUE_MAX;
+              sendQueueRef.current.splice(0, dropped);
+              console.warn('[WS CLIENT] send queue exceeded max; dropped', dropped, 'oldest messages');
+            }
+            try { localStorage.setItem('district_ws_queue', JSON.stringify(sendQueueRef.current)); } catch (e) {}
+          } catch (e) { console.warn('[WS CLIENT] enqueue failed', e && e.message); }
+        }
+      } catch (e) { console.error('[WS CLIENT] send error', e && e.message); }
+    } catch (e) { console.error('[DIAGRAM] writeDiagramState error', e && e.message); }
   }, []);
 
   // Poll server periodically to detect remote updates and reload local state when newer
@@ -1659,9 +1762,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     });
   }, [readDiagramState, writeDiagramState, getPersistedNodeEntry]);
 
-  const persistDistrictState = useCallback((nextNodes = nodesRef.current, nextEdges = edgesRef.current) => {
+  const persistDistrictState = useCallback(async (nextNodes = nodesRef.current, nextEdges = edgesRef.current, options = {}) => {
     try {
-      const raw = readDiagramState();
+      // Use local cache as baseline; do NOT fetch remote authoritative state here
+      const baseline = readDiagramState();
+      const raw = { ...(baseline || {}) };
       const savedNodes = {};
       (nextNodes || []).forEach((n) => {
         const prev = raw.nodes && raw.nodes[n.id] && typeof raw.nodes[n.id] === 'object' ? raw.nodes[n.id] : {};
@@ -1669,12 +1774,20 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       });
       raw.nodes = savedNodes;
       raw.edges = Array.isArray(nextEdges) ? nextEdges : [];
-      raw.hiddenNodeIds = Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds : [];
-      raw.deletedNodeIds = Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds : [];
+      raw.hiddenNodeIds = Array.isArray(options.hiddenNodeIds) ? options.hiddenNodeIds : (Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds : []);
+      raw.deletedNodeIds = Array.isArray(options.deletedNodeIds) ? options.deletedNodeIds : (Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds : []);
       // Only persist to localStorage/server when autosave is enabled.
       if (autoSaveEnabledRef.current) {
-        writeDiagramState(raw);
-        try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
+        // Validate before attempting server save
+        try {
+          if (!_validateBeforeSave(raw, baseline)) {
+            console.warn('[DIAGRAM] Persist aborted: payload failed validation');
+            try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
+          } else {
+            writeDiagramState(raw);
+            try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
+          }
+        } catch (e) { /* validation errors -> mark dirty */ try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (err) {} }
       } else {
         // Mark as dirty (changes pending save) when autosave is disabled
         try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
@@ -1736,8 +1849,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
     setNodes(nextNodes);
     nodesRef.current = nextNodes;
-      persistDistrictState(nextNodes, edgesRef.current);
-      try { const raw = readDiagramState(); writeDiagramState(raw); } catch (err) {}
+    persistDistrictState(nextNodes, edgesRef.current);
   }, [persistDistrictState]);
 
   const changeSelectedNodeColor = useCallback((color, targetId = selectedNodeId) => {
@@ -1764,7 +1876,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       });
       nodesRef.current = updated;
       persistDistrictState(updated, edgesRef.current);
-      try { const raw = readDiagramState(); writeDiagramState(raw); } catch (err) {}
       return updated;
     });
   }, [selectedNodeId, persistDistrictState]);
@@ -1915,10 +2026,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges(updated);
     edgesRef.current = updated;
     try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
-    try {
-      const raw = readDiagramState();
-      writeDiagramState(raw);
-    } catch (err) {}
   }, [selectedEdgeId, readDiagramState, writeDiagramState]);
 
   const updateSelectedEdgeLabel = useCallback((edgeId = selectedEdgeId, newLabel = '') => {
@@ -1927,10 +2034,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges(updated);
     edgesRef.current = updated;
     try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
-    try {
-      const raw = readDiagramState();
-      writeDiagramState(raw);
-    } catch (err) {}
   }, [selectedEdgeId, readDiagramState, writeDiagramState]);
 
   const upsertOrToggleConnection = useCallback((sourceId, targetId) => {
@@ -2016,9 +2119,14 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
   const deleteSelectedNode = useCallback((overriddenId = selectedNodeId) => {
     const targetId = overriddenId || selectedNodeId;
-    if (!targetId) return;
-    const ok = window.confirm('¿Eliminar el elemento seleccionado?');
-    if (!ok) return;
+    if (!targetId) return false;
+
+    // Guardar para Deshacer/Undo
+    try {
+      const before = (nodesRef.current || []).map(n => ({ id: n.id, position: n.position }));
+      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
+      futureRef.current = [];
+    } catch (e) {}
 
     const nextNodes = (nodesRef.current || []).filter((n) => n.id !== targetId);
     const nextEdges = (edgesRef.current || []).filter((edge) => edge.source !== targetId && edge.target !== targetId);
@@ -2037,19 +2145,19 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       hiddenNodeIds: filteredSavedHidden,
       deletedNodeIds: nextDeletedIds,
     };
-    // Persist through central function which respects autosave preference
-    try { persistDistrictState(nextNodes, nextEdges); } catch (e) {}
 
     setNodes(nextNodes);
     setEdges(nextEdges);
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
     setSelectedNodeId(null);
-    persistDistrictState(nextNodes, nextEdges);
+    if (onNodeSelect) onNodeSelect(null);
+
     try {
-      // Ensure deletedNodeIds is stored and pushed to server immediately
-      writeDiagramState(nextState);
-    } catch (err) { console.warn('[DistrictFlow] writeDiagramState on delete failed', err && err.message); }
+      persistDistrictState(nextNodes, nextEdges, { deletedNodeIds: nextDeletedIds, hiddenNodeIds: filteredSavedHidden });
+    } catch (err) { console.warn('[DistrictFlow] persist on delete failed', err && err.message); }
     return true;
-  }, [persistDistrictState, readDiagramState, selectedNodeId, writeDiagramState]);
+  }, [persistDistrictState, readDiagramState, selectedNodeId, writeDiagramState, onNodeSelect]);
 
   // Apply remote persisted state incrementally without reloading the page
   const applyRemoteState = useCallback((remote) => {
@@ -2379,40 +2487,38 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     } catch (e) {}
   }, [upsertOrToggleConnection]);
 
-  const deleteSelectedConnection = useCallback(() => {
-    if (!selectedEdgeId) return;
-    const ok = window.confirm('¿Eliminar la conexión seleccionada?');
-    if (!ok) return;
+  const deleteSelectedConnection = useCallback((edgeId = selectedEdgeId) => {
+    const targetId = edgeId || selectedEdgeId;
+    if (!targetId) return false;
 
-    const next = (edgesRef.current || []).filter((edge) => edge.id !== selectedEdgeId);
+    try {
+      const before = (nodesRef.current || []).map(n => ({ id: n.id, position: n.position }));
+      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
+      futureRef.current = [];
+    } catch (e) {}
+
+    const next = (edgesRef.current || []).filter((edge) => edge.id !== targetId);
     setEdges(next);
     edgesRef.current = next;
     setSelectedEdgeId(null);
     persistConnection(next);
+    return true;
   }, [persistConnection, selectedEdgeId]);
 
   const onEdgesDelete = useCallback((deleted) => {
     if (!deleted || !deleted.length) return;
-    const ok = window.confirm('¿Eliminar la conexión seleccionada?');
-    if (!ok) return;
-      try {
-        const before = nodesRef.current.map(n => ({ id: n.id, position: n.position }));
-        pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
-        futureRef.current = [];
-        const ids = new Set(deleted.map(d => d.id));
-        const next = (edgesRef.current || []).filter(e => !ids.has(e.id));
-        setEdges(next);
-        edgesRef.current = next;
-          try {
-          const saved = JSON.parse(localStorage.getItem('district_state') || '{}');
-          saved.edges = next;
-          const prevMap = saved.nodes && typeof saved.nodes === 'object' ? saved.nodes : {};
-          saved.nodes = Object.fromEntries(nodesRef.current.map(n => [n.id, getPersistedNodeEntry(n, prevMap[n.id] || {})]));
-          try { if (autoSaveEnabledRef.current) localStorage.setItem('district_state', JSON.stringify(saved)); } catch (e) {}
-        } catch (e) {}
-        setSelectedEdgeId(null);
-      } catch (e) {}
-  }, []);
+    try {
+      const before = (nodesRef.current || []).map(n => ({ id: n.id, position: n.position }));
+      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
+      futureRef.current = [];
+      const ids = new Set(deleted.map(d => d.id));
+      const next = (edgesRef.current || []).filter(e => !ids.has(e.id));
+      setEdges(next);
+      edgesRef.current = next;
+      persistConnection(next);
+      setSelectedEdgeId(null);
+    } catch (e) {}
+  }, [persistConnection]);
 
   const doUndo = useCallback(() => {
     const past = pastRef.current;
@@ -2574,19 +2680,32 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     try { pastRef.current.push({ nodes: Object.fromEntries((currentNodes || []).map(n => [n.id, n.position])), edges: currentEdges }); futureRef.current = []; } catch (e) {}
   }, [getPersistedNodeEntry]);
 
-  const doSave = useCallback(() => {
+  const doSave = useCallback(async () => {
     try {
+      // Use local cached state as baseline for saving; avoid fetching remote state
       const savedState = readDiagramState();
       // Capture exact runtime positions from React Flow when available
       const runtimeNodes = (rfInstance && typeof rfInstance.getNodes === 'function') ? rfInstance.getNodes() : (nodesRef.current || []);
+      const runtimeEdges = (rfInstance && typeof rfInstance.getEdges === 'function') ? rfInstance.getEdges() : (edgesRef.current || []);
       const saved = {
         ...savedState,
         nodes: Object.fromEntries((runtimeNodes || []).map(n => {
           const prev = savedState.nodes && savedState.nodes[n.id] && typeof savedState.nodes[n.id] === 'object' ? savedState.nodes[n.id] : {};
           return [n.id, getPersistedNodeEntry(n, prev)];
         })),
-        edges: edgesRef.current || [],
+        edges: Array.isArray(runtimeEdges) ? runtimeEdges : (edgesRef.current || []),
       };
+      // Validate before attempting to write to server
+      try {
+        const localBaseline = savedState || {};
+        if (!_validateBeforeSave(saved, localBaseline)) {
+          console.warn('[DIAGRAM] doSave aborted: payload failed validation');
+          try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
+          setSaveMsg('error');
+          setTimeout(() => setSaveMsg(null), 3000);
+          return;
+        }
+      } catch (e) { /* proceed conservatively */ }
       writeDiagramState(saved);
       try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
       // Toast no bloqueante — no usa alert() que congela JS
@@ -2668,17 +2787,21 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const didInitDiagramRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     const freshApiNodes = Array.isArray(initialNodes) ? initialNodes : [];
-    const saved = readDiagramState();
-    const hasSavedState = saved && typeof saved === 'object' && (
-      (Object.keys(saved.nodes || {}).length > 0) ||
-      (Array.isArray(saved.edges) && saved.edges.length > 0)
-    );
 
-    if (!didInitDiagramRef.current) {
-      didInitDiagramRef.current = true;
+    const loadInitialDiagramState = async () => {
+      const saved = await readAuthoritativeDiagramState();
+      if (cancelled) return;
+      const hasSavedState = saved && typeof saved === 'object' && (
+        (Object.keys(saved.nodes || {}).length > 0) ||
+        (Array.isArray(saved.edges) && saved.edges.length > 0)
+      );
 
-      if (hasSavedState && freshApiNodes.length > 0) {
+      if (!didInitDiagramRef.current) {
+        didInitDiagramRef.current = true;
+
+        if (hasSavedState && freshApiNodes.length > 0) {
         const savedNodesById = new Map(Object.entries(saved.nodes || {}).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)]));
         const deletedIds = Array.isArray(saved.deletedNodeIds) ? saved.deletedNodeIds : [];
 
@@ -2755,79 +2878,160 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         return;
       }
 
-      if (hasSavedState && freshApiNodes.length === 0) {
-        const savedNodes = Object.entries(saved.nodes || {}).map(([id, entry]) => {
-          if (!entry || typeof entry !== 'object') return null;
-          const type = entry.type || 'tank';
-          const label = String(entry.customName || entry.label || id).trim() || id;
-          const position = { x: Number.isFinite(Number(entry.x)) ? Number(entry.x) : 0, y: Number.isFinite(Number(entry.y)) ? Number(entry.y) : 0 };
-          const nodeData = ensureNodeData({ id, type, label, position, data: { ...entry, id, customName: entry.customName || '', label } });
+        if (hasSavedState && freshApiNodes.length === 0) {
+          const savedNodes = Object.entries(saved.nodes || {}).map(([id, entry]) => {
+            if (!entry || typeof entry !== 'object') return null;
+            const type = entry.type || 'tank';
+            const label = String(entry.customName || entry.label || id).trim() || id;
+            const position = { x: Number.isFinite(Number(entry.x)) ? Number(entry.x) : 0, y: Number.isFinite(Number(entry.y)) ? Number(entry.y) : 0 };
+            const nodeData = ensureNodeData({ id, type, label, position, data: { ...entry, id, customName: entry.customName || '', label } });
+            return {
+              id,
+              type,
+              position,
+              customName: entry.customName || '',
+              label,
+              data: { ...entry, customName: entry.customName || '', label, nodeData },
+            };
+          }).filter(Boolean);
+
+          const savedEdges = (Array.isArray(saved.edges) ? saved.edges : [])
+            .filter(isValidSavedEdge)
+            .map((edge) => normalizeSavedEdge(edge, {
+              animated: !!showFlow,
+              type: 'step',
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
+              style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+            }))
+            .filter((edge) => edge.source && edge.target);
+
+          nodesRef.current = savedNodes;
+          edgesRef.current = savedEdges;
+          setNodes(savedNodes);
+          setEdges(savedEdges);
+          return;
+        }
+
+        try { console.debug('[DISTRICT DEBUG] initialNodes received:', freshApiNodes.length); } catch (e) {}
+        const sourceNodes = freshApiNodes.length ? freshApiNodes : STATIC_NODES.map(s => {
+          if (s.type === 'plant' || s.type === 'district') return { id: s.id, type: s.type, label: s.label, position: s.position, data: { display_name: s.label } };
+          return { id: s.id, type: 'tank', label: s.label, position: s.position, data: { display_name: s.label, __placeholder: true } };
+        });
+        const n = sourceNodes.map(x => {
+          const resolvedData = ensureNodeData({ id: x.id, type: x.type, label: x.label, position: x.position, data: x.data || x });
           return {
-            id,
-            type,
-            position,
-            customName: entry.customName || '',
-            label,
-            data: { ...entry, customName: entry.customName || '', label, nodeData },
+            id: x.id,
+            data: { nodeData: resolvedData, onSelect: onNodeSelect },
+            type: x.type === 'tank' ? 'tank' : (x.type === 'plant' ? 'plant' : (x.type === 'district' ? 'district' : (x.type === 'shape' ? 'shape' : 'tank'))),
+            position: x.position,
           };
-        }).filter(Boolean);
+        });
+        const e = (initialEdges || []).map(x => {
+          const source = x.source || x.from || x.fromId || null;
+          const target = x.target || x.to || x.toId || null;
+          return { id: x.id || `${source || 'unknown'}-${target || 'unknown'}`, source, target, label: x.label || x.name || '', style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } };
+        }).filter(ed => ed.source && ed.target);
 
-        const savedEdges = (Array.isArray(saved.edges) ? saved.edges : [])
-          .filter(isValidSavedEdge)
-          .map((edge) => normalizeSavedEdge(edge, {
-            animated: !!showFlow,
-            type: 'step',
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-            style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
-          }))
-          .filter((edge) => edge.source && edge.target);
+        const rfNodes = n.map(nd => ({ id: nd.id, type: nd.type, position: nd.position || null, data: nd.data }));
+        const rfEdges = e.map(ed => ({ id: ed.id, source: ed.source, target: ed.target, markerEnd: { type: MarkerType.ArrowClosed, color: '#000' }, animated: false, type: 'step', label: ed.label, style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } }));
 
-        nodesRef.current = savedNodes;
-        edgesRef.current = savedEdges;
-        setNodes(savedNodes);
-        setEdges(savedEdges);
+        const withControls = rfNodes.map(rn => {
+          const outer = rn.data || {};
+          const candidate = ensureNodeData({ id: rn.id, type: rn.type, label: rn.label, position: rn.position, data: outer.nodeData || outer });
+          const nodeDataWithId = ensureNodeData({ id: rn.id, type: rn.type, label: rn.label, position: rn.position, data: candidate });
+          return { ...rn, data: { ...outer, nodeData: nodeDataWithId } };
+        });
+        nodesRef.current = withControls;
+        edgesRef.current = rfEdges;
+        setNodes(withControls);
+        setEdges(rfEdges);
         return;
       }
 
-      try { console.debug('[DISTRICT DEBUG] initialNodes received:', freshApiNodes.length); } catch (e) {}
-      const sourceNodes = freshApiNodes.length ? freshApiNodes : STATIC_NODES.map(s => {
-        if (s.type === 'plant' || s.type === 'district') return { id: s.id, type: s.type, label: s.label, position: s.position, data: { display_name: s.label } };
-        return { id: s.id, type: 'tank', label: s.label, position: s.position, data: { display_name: s.label, __placeholder: true } };
-      });
-      const n = sourceNodes.map(x => {
-        const resolvedData = ensureNodeData({ id: x.id, type: x.type, label: x.label, position: x.position, data: x.data || x });
-        return {
-          id: x.id,
-          data: { nodeData: resolvedData, onSelect: onNodeSelect },
-          type: x.type === 'tank' ? 'tank' : (x.type === 'plant' ? 'plant' : (x.type === 'district' ? 'district' : (x.type === 'shape' ? 'shape' : 'tank'))),
-          position: x.position,
-        };
-      });
-      const e = (initialEdges || []).map(x => {
-        const source = x.source || x.from || x.fromId || null;
-        const target = x.target || x.to || x.toId || null;
-        return { id: x.id || `${source || 'unknown'}-${target || 'unknown'}`, source, target, label: x.label || x.name || '', style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } };
-      }).filter(ed => ed.source && ed.target);
+      if (!freshApiNodes.length) return;
+    };
 
-      const rfNodes = n.map(nd => ({ id: nd.id, type: nd.type, position: nd.position || null, data: nd.data }));
-      const rfEdges = e.map(ed => ({ id: ed.id, source: ed.source, target: ed.target, markerEnd: { type: MarkerType.ArrowClosed, color: '#000' }, animated: false, type: 'step', label: ed.label, style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } }));
+    loadInitialDiagramState();
+    return () => { cancelled = true; };
+  }, [initialNodes, initialEdges, readAuthoritativeDiagramState, showFlow]);
 
-      const withControls = rfNodes.map(rn => {
-        const outer = rn.data || {};
-        const candidate = ensureNodeData({ id: rn.id, type: rn.type, label: rn.label, position: rn.position, data: outer.nodeData || outer });
-        const nodeDataWithId = ensureNodeData({ id: rn.id, type: rn.type, label: rn.label, position: rn.position, data: candidate });
-        return { ...rn, data: { ...outer, nodeData: nodeDataWithId } };
-      });
-      nodesRef.current = withControls;
-      edgesRef.current = rfEdges;
-      setNodes(withControls);
-      setEdges(rfEdges);
-      return;
-    }
+  // Actualización periódica de métricas: solo actualizar datos de API, NUNCA las posiciones
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await tanqueService.getTanques();
+        const list = (res && res.tanques) || [];
+        if (!list || !list.length) return;
 
-    if (!freshApiNodes.length) return;
+        const map = new Map();
+        for (const t of list) {
+          if (!t) continue;
+          const key = String((t.tag || t.apiName || t.nombre || t.display_name || t.id || '')).toLowerCase();
+          map.set(key, t);
+        }
 
-    // Actualización periódica de métricas: solo actualizar datos de API, NUNCA las posiciones
+        const updated = (nodesRef.current || []).map((n) => {
+          try {
+            const nd = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
+            const candidates = [nd.apiName, nd.originalName, nd.tag, nd.display_name, nd.nombre, nd.label, n.id].map(x => String(x || '').toLowerCase());
+            let found = null;
+            for (const c of candidates) {
+              if (!c) continue;
+              if (map.has(c)) { found = map.get(c); break; }
+            }
+            if (!found) return n;
+
+            const nameLocked = Boolean(nd.nameLocked || n.nameLocked || (nd && nd.nameLocked));
+            const preservedCustom = nameLocked ? (nd.customName || n.customName || '') : (nd.customName || found.display_name || '');
+
+            const enriched = enrichTankNodeMetrics(found || {});
+            const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
+
+            return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData, ...mergedNodeData } };
+          } catch (e) { return n; }
+        });
+
+        if (mounted) {
+          nodesRef.current = updated;
+          setNodes([...updated]);
+        }
+      } catch (e) {}
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  // monitor queue size and ws status periodically for UI
+  useEffect(() => {
+    const id = setInterval(() => {
+      try { setWsQueueSize((sendQueueRef.current || []).length); } catch (e) { setWsQueueSize(0); }
+      try { setWsConnected(Boolean(wsRef.current && wsRef.current.readyState === WebSocket.OPEN)); } catch (e) { setWsConnected(false); }
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // debug flag: read from localStorage and support Ctrl+Shift+D toggle
+  useEffect(() => {
+    try { const v = (localStorage.getItem('district_debug_ws') || 'false') === 'true'; setDebugWsEnabled(v); } catch (e) { setDebugWsEnabled(false); }
+    const handler = (ev) => {
+      if (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === 'd') {
+        try {
+          const next = !debugWsEnabled;
+          setDebugWsEnabled(next);
+          try { localStorage.setItem('district_debug_ws', next ? 'true' : 'false'); } catch (e) {}
+          console.log('[DISTRICT] toggled district_debug_ws ->', next);
+        } catch (e) {}
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [debugWsEnabled]);
+
+  // Actualización periódica de métricas: solo actualizar datos de API, NUNCA las posiciones
+  useEffect(() => {
+    const freshApiNodes = Array.isArray(initialNodes) ? initialNodes : [];
+    if (!freshApiNodes.length) return undefined;
+
     setNodes((nds) => {
       const updated = nds.map((n) => {
         const freshApiNode = freshApiNodes.find((x) => x.id === n.id);
@@ -2839,17 +3043,21 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         const currentNameLocked = Boolean((currentNd && currentNd.nameLocked) || n.nameLocked || (n.data && n.data.nameLocked));
         const preservedCustomName = currentNameLocked ? currentCustomName : (currentCustomName || String((freshData.customName || '')).trim());
         const nextLabel = preservedCustomName || (freshData.label && String(freshData.label).trim()) || currentNd.label || n.label || freshApiNode.label || n.id;
-        // Calcular porcentaje: fórmula (valor_m / altura_rebose calibrada).
-        // calidad=DUDOSA o sin_datos=true → null (Sin datos). No usar porcentaje_capacidad.
-        const _isBadQuality = freshData.calidad === 'DUDOSA' || freshData.sin_datos === true;
-        let nextPercent = null;
-        if (!_isBadQuality && freshData.valor_m != null && Number.isFinite(Number(freshData.valor_m))) {
-          if (freshData.altura_rebose != null && Number.isFinite(Number(freshData.altura_rebose)) && Number(freshData.altura_rebose) > 0) {
-            const _rawPct = (Number(freshData.valor_m) / Number(freshData.altura_rebose)) * 100;
-            if (Number.isFinite(_rawPct)) nextPercent = Math.round(Math.max(0, Math.min(100, _rawPct)));
-          }
-        }
-        // Si DUDOSA, valor_m null o sin altura calibrada → Sin datos (null)
+
+        const percentageCandidates = [
+          freshData.porcentaje_capacidad,
+          freshData.porcentaje_capacidad_api,
+          freshData.porcentaje_api,
+          freshData.porcentaje,
+          currentNd.porcentaje_capacidad,
+          currentNd.porcentaje_capacidad_api,
+          currentNd.porcentaje_api,
+          currentNd.porcentaje,
+        ];
+        const nextPercent = percentageCandidates.find((value) => value !== null && value !== undefined && value !== '') != null
+          ? Number(percentageCandidates.find((value) => value !== null && value !== undefined && value !== ''))
+          : null;
+
         const merged = {
           ...currentNd,
           ...freshData,
@@ -2887,6 +3095,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       nodesRef.current = updated;
       return updated;
     });
+    return undefined;
   }, [initialNodes, initialEdges, readDiagramState, showFlow]);
 
   // Efecto separado: solo actualiza animated en edges cuando cambia showFlow

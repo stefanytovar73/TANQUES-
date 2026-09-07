@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import MainLayout from "../layouts/MainLayout";
 import Inicio from "../pages/Inicio/Inicio";
@@ -16,8 +16,7 @@ export default function AppRouter() {
         <BrowserRouter>
             <Routes>
                 <Route element={<MainLayout />}>
-                    {/* In development, default to /distritos so editor preview and browser show same screen */}
-                    <Route index element={import.meta.env.DEV ? <Navigate to="/distritos" replace /> : <Inicio />} />
+                    <Route index element={<Inicio />} />
                     <Route path="dashboard" element={<Dashboard />} />
                     <Route path="tanques" element={<Tanques />} />
                     <Route path="distritos" element={<Distritos />} />

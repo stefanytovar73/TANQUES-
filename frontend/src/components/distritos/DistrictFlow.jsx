@@ -248,6 +248,22 @@ async function loadFlowMetricForNodeId(nodeId) {
   }
 }
 
+function getCachedFlowMetricForNodeId(nodeId) {
+  const config = getMetricConfigForNodeId(nodeId);
+  if (!config) return null;
+
+  try {
+    const response = config.service === 'ptap'
+      ? tanqueService.peekPtap?.()
+      : tanqueService.peekCaptacion?.();
+    const variables = (response && response.variables) || [];
+    const variable = variables.find((item) => item && item.tag === config.tag);
+    return variable ? formatFlowMetricVariable(variable, config.defaultUnit) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function enrichTankNodeMetrics(data = {}) {
   const source = { ...(data || {}) };
   const nivel = source.valor_m ?? source.nivel ?? source.valor ?? source.level ?? source.level_m ?? null;
@@ -559,7 +575,8 @@ function FlowPlantNode(props) {
   };
   const isPending = Boolean(data && data.pendingConnect);
   const labelText = getNodeDisplayName({ data: nodeData });
-  const [metricLabel, setMetricLabel] = useState(null);
+  const metricNodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
+  const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId));
   const beginEdit = (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -569,24 +586,26 @@ function FlowPlantNode(props) {
 
   useEffect(() => {
     let mounted = true;
-    const nodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
+
+    const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId);
+    if (cachedLabel != null) setMetricLabel(cachedLabel);
 
     (async () => {
       try {
-        if (!nodeId || !getMetricConfigForNodeId(nodeId)) {
+        if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId)) {
           if (mounted) setMetricLabel(null);
           return;
         }
 
-        const label = await loadFlowMetricForNodeId(nodeId);
+        const label = await loadFlowMetricForNodeId(metricNodeId);
         if (mounted) setMetricLabel(label);
       } catch (error) {
-        if (mounted) setMetricLabel(null);
+        // Conservar el último dato visible si el refresco falla.
       }
     })();
 
     return () => { mounted = false; };
-  }, [nodeData?.id, nodeData?.nodeId, data?.id, data?.nodeId]);
+  }, [metricNodeId]);
 
   useEffect(() => {
     if (data && data.openEditor) {
@@ -1209,12 +1228,16 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const [diagramMode, setDiagramMode] = useState(() => {
     try { return localStorage.getItem('district_diagram_mode') || 'view'; } catch (e) { return 'view'; }
   });
+  const diagramModeRef = useRef(diagramMode);
+  useEffect(() => { diagramModeRef.current = diagramMode; }, [diagramMode]);
+
   // Sincronizar con el prop externo cuando cambia
   useEffect(() => {
     if (diagramModeExternal && diagramModeExternal !== diagramMode) {
       setDiagramMode(diagramModeExternal);
+      diagramModeRef.current = diagramModeExternal;
     }
-  }, [diagramModeExternal]);
+  }, [diagramModeExternal, diagramMode]);
   const [wsQueueSize, setWsQueueSize] = useState(0);
   const [wsConnected, setWsConnected] = useState(false);
   const [debugWsEnabled, setDebugWsEnabled] = useState(false);
@@ -1676,6 +1699,8 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const futureRef = useRef([]);
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  const draftPositionsRef = useRef(new Map());
+  const activeDragNodeIdRef = useRef(null);
   // Ref estable para onNodeSelect — evita recrear callbacks cuando el padre re-renderiza
   const onNodeSelectRef = useRef(onNodeSelect);
   useEffect(() => { onNodeSelectRef.current = onNodeSelect; }, [onNodeSelect]);
@@ -1848,26 +1873,38 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
   const editUnlockAllNodes = useCallback(() => {
     try {
-      // Obtener nodos actuales de ReactFlow (posiciones exactas en pantalla)
       const currentNodes = rfInstance && typeof rfInstance.getNodes === 'function'
         ? rfInstance.getNodes()
         : (nodesRef.current || []);
 
       const updated = currentNodes.map((n) => {
+        const draftPosition = draftPositionsRef.current.get(n.id);
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: false };
-        return { ...n, draggable: true, data: { ...(n.data || {}), lockedPosition: false, nodeData: newNodeData } };
+        return {
+          ...n,
+          position: draftPosition || n.position,
+          draggable: true,
+          data: { ...(n.data || {}), lockedPosition: false, nodeData: newNodeData },
+        };
       });
+
       nodesRef.current = updated;
+      diagramModeRef.current = 'edit';
       try { setNodes([...updated]); } catch (e) {}
 
-      // Actualizar localStorage: desbloquear todos
+      // El desbloqueo debe ser inmediato aunque Autosave esté apagado. Esto solo
+      // modifica el estado local; el botón Guardar sigue siendo quien publica.
       const saved = readDiagramState();
       saved.nodes = saved.nodes || {};
-      for (const id of Object.keys(saved.nodes)) saved.nodes[id] = { ...(saved.nodes[id] || {}), lockedPosition: false };
-      try { if (autoSaveEnabledRef.current) localStorage.setItem('district_state', JSON.stringify(saved)); } catch (e) {}
-    } catch (e) { console.warn('[DISTRICT] editUnlockAllNodes failed', e && e.message); }
-  }, [rfInstance]);
+      for (const id of Object.keys(saved.nodes)) {
+        saved.nodes[id] = { ...(saved.nodes[id] || {}), lockedPosition: false };
+      }
+      try { localStorage.setItem('district_state', JSON.stringify(saved)); } catch (e) {}
+    } catch (e) {
+      console.warn('[DISTRICT] editUnlockAllNodes failed', e && e.message);
+    }
+  }, [rfInstance, readDiagramState]);
 
   const saveAndLockAllNodes = useCallback(() => {
     try {
@@ -1877,9 +1914,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         : (nodesRef.current || []);
 
       const updated = currentNodes.map((n) => {
+        const draftPosition = draftPositionsRef.current.get(n.id);
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: true };
-        return { ...n, draggable: false, data: { ...(n.data || {}), lockedPosition: true, nodeData: newNodeData } };
+        return {
+          ...n,
+          position: draftPosition || n.position,
+          draggable: false,
+          data: { ...(n.data || {}), lockedPosition: true, nodeData: newNodeData },
+        };
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
@@ -2123,18 +2166,30 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       const updated = current.map((n) => {
         const r = sanitizedRemote[n.id];
         if (!r) return n;
-        // Preserve existing client-side position to avoid moving nodes unexpectedly.
+        const draftPosition = draftPositionsRef.current.get(n.id);
         const hasLocalPos = n && n.position && n.position.x != null && n.position.y != null;
-        const isLocked = !!(n && n.data && n.data.nodeData && n.data.nodeData.lockedPosition);
-        const position = (hasLocalPos || isLocked) ? n.position : sanitizePosition({ x: r.x, y: r.y });
-        const nodeData = ensureNodeData({ id: n.id, type: r.type, label: r.label, position, data: { ...(n.data && n.data.nodeData ? n.data.nodeData : {}), ...r } });
+        const editingNow = diagramModeRef.current === 'edit';
+        const position = draftPosition
+          || (hasLocalPos ? n.position : sanitizePosition({ x: r.x, y: r.y }));
+        const effectiveLocked = editingNow ? false : !!r.lockedPosition;
+        const nodeData = ensureNodeData({
+          id: n.id,
+          type: r.type,
+          label: r.label,
+          position,
+          data: {
+            ...(n.data && n.data.nodeData ? n.data.nodeData : {}),
+            ...r,
+            lockedPosition: effectiveLocked,
+          },
+        });
         return {
           ...n,
           position,
-          draggable: !r.lockedPosition,
+          draggable: editingNow ? true : !effectiveLocked,
           customName: r.customName || n.customName || nodeData.customName || '',
           label: r.label || n.label || nodeData.label || n.id,
-          data: { ...(n.data || {}), ...r, lockedPosition: !!r.lockedPosition, nodeData },
+          data: { ...(n.data || {}), ...r, lockedPosition: effectiveLocked, nodeData },
         };
       });
 
@@ -2143,7 +2198,18 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         if (existingIds.has(id)) continue;
         const position = sanitizePosition({ x: r.x, y: r.y });
         const nodeData = ensureNodeData({ id, type: r.type, label: r.label, position, data: r });
-        updated.push({ id, type: r.type || 'tank', position, draggable: !r.lockedPosition, customName: r.customName || '', nameLocked: !!r.nameLocked, label: r.label || id, data: { ...r, customName: r.customName || '', label: r.label || id, lockedPosition: !!r.lockedPosition, nodeData } });
+        const editingNow = diagramModeRef.current === 'edit';
+        const effectiveLocked = editingNow ? false : !!r.lockedPosition;
+        updated.push({
+          id,
+          type: r.type || 'tank',
+          position,
+          draggable: editingNow ? true : !effectiveLocked,
+          customName: r.customName || '',
+          nameLocked: !!r.nameLocked,
+          label: r.label || id,
+          data: { ...r, customName: r.customName || '', label: r.label || id, lockedPosition: effectiveLocked, nodeData },
+        });
       }
 
       const normalizedEdgesRaw = (remoteEdges || []).filter(isValidSavedEdge).map((edge) => normalizeSavedEdge(edge, {
@@ -2660,6 +2726,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         edges: edgesRef.current || [],
       };
       writeDiagramState(saved);
+      draftPositionsRef.current = new Map((runtimeNodes || []).map((n) => [n.id, sanitizePosition(n.position || {})]));
       try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
       // Toast no bloqueante — no usa alert() que congela JS
       setSaveMsg('ok');
@@ -2688,12 +2755,16 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   }, []);
 
   const onNodesChange = useCallback((changes) => {
+    for (const change of changes || []) {
+      if (change?.type === 'position' && change.id && change.position) {
+        draftPositionsRef.current.set(change.id, sanitizePosition(change.position));
+      }
+    }
+
     setNodes((nds) => {
       const next = applyNodeChanges(changes, nds);
-      // Siempre mantener nodesRef sincronizado con las posiciones reales de ReactFlow
       nodesRef.current = next;
-      // Solo persistir en localStorage en cambios que NO sean de posición durante drag
-      // (la posición final se persiste en onNodeDragStop)
+
       const hasPositionChange = changes.some(c => c.type === 'position' && c.dragging);
       if (!hasPositionChange) {
         persistDistrictState(next, edgesRef.current);
@@ -2713,28 +2784,36 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
   const onNodeDragStop = useCallback((event, node) => {
     try {
+      const finalPosition = sanitizePosition(node?.position || draftPositionsRef.current.get(node?.id) || {});
+      if (node?.id) draftPositionsRef.current.set(node.id, finalPosition);
+      activeDragNodeIdRef.current = null;
+
       const before = nodesRef.current.map(n => ({ id: n.id, position: n.position }));
       pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
       futureRef.current = [];
 
-      // Actualizar nodesRef con la posición FINAL del nodo arrastrado
-      // ReactFlow ya actualizó su estado interno; reflejamos eso en nodesRef
       const newNodes = (nodesRef.current || []).map(n =>
-        n.id === node.id ? { ...n, position: { x: node.position.x, y: node.position.y } } : n
+        n.id === node.id
+          ? { ...n, position: finalPosition, draggable: diagramModeRef.current === 'edit' ? true : n.draggable }
+          : n
       );
       nodesRef.current = newNodes;
       setNodes([...newNodes]);
-
-      // Guardar posición inmediatamente en localStorage
       persistDistrictState(newNodes, edgesRef.current);
 
-      // restore overlay visibility after drag
+      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
       try { setOverlayVisible(true); } catch (e) {}
     } catch (e) {}
-  }, [persistDistrictState]);
+  }, [persistDistrictState, onDirtyChanged]);
 
-  const onNodeDragStart = useCallback(() => {
-    try { setOverlayVisible(false); } catch (e) {}
+  const onNodeDragStart = useCallback((event, node) => {
+    try {
+      activeDragNodeIdRef.current = node?.id || null;
+      if (node?.id && node?.position) {
+        draftPositionsRef.current.set(node.id, sanitizePosition(node.position));
+      }
+      setOverlayVisible(false);
+    } catch (e) {}
   }, []);
 
   const didInitDiagramRef = useRef(false);
@@ -2771,7 +2850,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               id: freshNode.id,
               type: freshNode.type || 'tank',
               position: sanitizePosition(rawPosition),
-              draggable: !persistedVisual.lockedPosition,
+              draggable: diagramModeRef.current === 'edit' ? true : !persistedVisual.lockedPosition,
               customName,
               nameLocked,
               label,
@@ -2799,7 +2878,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               id: savedId,
               type: persistedVisual.type || 'tank',
               position: sanitizePosition(rawPosition),
-              draggable: !persistedVisual.lockedPosition,
+              draggable: diagramModeRef.current === 'edit' ? true : !persistedVisual.lockedPosition,
               customName,
               nameLocked,
               label,
@@ -2841,7 +2920,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
             id,
             type,
             position,
-            draggable: !entry.lockedPosition,
+            draggable: diagramModeRef.current === 'edit' ? true : !entry.lockedPosition,
             customName: entry.customName || '',
             label,
             data: { ...entry, customName: entry.customName || '', label, lockedPosition: !!entry.lockedPosition, nodeData },

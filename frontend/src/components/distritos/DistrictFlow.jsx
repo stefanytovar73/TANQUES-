@@ -458,6 +458,22 @@ function _formatMetric(variable) {
   return `${value} ${variable.unidad || ''}`.trim();
 }
 
+function getCachedPtapMetricMap() {
+  if (_ptapMetricsMap && Object.keys(_ptapMetricsMap).length) return _ptapMetricsMap;
+  try {
+    const cached = tanqueService.peekPtap?.();
+    const map = {};
+    for (const variable of (cached?.variables || [])) {
+      if (variable?.tag) map[String(variable.tag).toUpperCase()] = variable;
+    }
+    if (Object.keys(map).length) {
+      _ptapMetricsMap = map;
+      return map;
+    }
+  } catch (e) {}
+  return {};
+}
+
 function getBaseNodeName(node) {
   const source = node?.data?.nodeData || node?.data || {};
   return source.apiName || source.originalName || source.tag || source.display_name || source.nombre || source.label || node?.label || node?.id || 'Sin nombre';
@@ -840,6 +856,76 @@ function enrichTankNodeMetrics(data = {}) {
     rotation: Number.isFinite(Number(source.rotation)) ? Number(source.rotation) : 0,
     label: source.label || source.display_name || source.nombre || source.apiName || source.originalName || source.tag || 'Sin nombre',
   };
+}
+
+function hydrateInitialTankTelemetry(nodes = []) {
+  try {
+    const cachedTanquesPayload = tanqueService.peekTanques?.();
+    const list = Array.isArray(cachedTanquesPayload?.tanques) ? cachedTanquesPayload.tanques : [];
+    if (!list.length) return nodes;
+
+    const catalog = loadCatalog();
+    const byTag = new Map();
+    for (const tank of list) {
+      if (!tank) continue;
+      const tag = String(tank.tag || '').toUpperCase();
+      if (tag) byTag.set(tag, tank);
+    }
+
+    return (nodes || []).map((n) => {
+      try {
+        const nd = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
+        if ((n.type || nd.type) !== 'tank') return n;
+
+        const exactTag = EXACT_TANK_TAG_BY_NODE_ID[String(n.id || nd.id || '')] || null;
+        let found = exactTag ? byTag.get(String(exactTag).toUpperCase()) : null;
+
+        if (!found) {
+          const nodeLabels = [
+            nd.tag, nd.apiName, nd.originalName, nd.display_name, nd.nombre,
+            nd.label, nd.customName, n.label, n.id,
+          ].filter(Boolean);
+
+          for (const tank of list) {
+            if (!tank) continue;
+            const tankLabels = [
+              tank.tag, tank.apiName, tank.originalName, tank.nombre,
+              tank.display_name, tank.id, tank.label,
+            ].filter(Boolean);
+
+            if (nodeLabels.some((left) => tankLabels.some((right) => textMatchesComparableAlias(left, right)))) {
+              found = tank;
+              break;
+            }
+          }
+        }
+
+        if (!found) return n;
+
+        const mergedApi = (mergeApiTanquesWithCatalog([found], catalog) || [found])[0] || found;
+        const enriched = enrichTankNodeMetrics(mergedApi || {});
+        const nextNodeData = {
+          ...nd,
+          ...enriched,
+          id: n.id,
+          customName: nd.customName || n.customName || '',
+          display_name: nd.display_name || enriched.display_name || enriched.nombre || nd.label || n.label || n.id,
+        };
+
+        return {
+          ...n,
+          data: {
+            ...(n.data || {}),
+            nodeData: nextNodeData,
+          },
+        };
+      } catch (e) {
+        return n;
+      }
+    });
+  } catch (e) {
+    return nodes;
+  }
 }
 
 function normalizeDiagramNodeEntries(rawNodes) {
@@ -1502,10 +1588,18 @@ function FlowShapeNode(props) {
     setDraft(runtimeDisplayName);
   }, [runtimeDisplayName]);
 
-  const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '') ? String(runtimeNodeData.ptapMetricText) : null;
+  const cachedPtapMap = getCachedPtapMetricMap();
+  const _resolvedExactTag = getExactMackenflocTagForNode({ id: runtimeNodeData && runtimeNodeData.id, label: runtimeNodeData && runtimeNodeData.label }, runtimeNodeData, cachedPtapMap);
+  const _resolvedShapeTag = resolveLivePtapTagForNode({ id: runtimeNodeData && runtimeNodeData.id, label: runtimeNodeData && runtimeNodeData.label, data: { nodeData: runtimeNodeData } }, cachedPtapMap, _resolvedExactTag);
+  const _runtimeMetricMatch = findMetricVariableForNode({ id: runtimeNodeData && runtimeNodeData.id, label: runtimeNodeData && runtimeNodeData.label, data: { nodeData: runtimeNodeData } }, cachedPtapMap);
+  const _cachedMetricVariable = _runtimeMetricMatch.variable || (_resolvedShapeTag && cachedPtapMap[_resolvedShapeTag] ? cachedPtapMap[_resolvedShapeTag] : null);
+  const _cachedMetricText = _formatMetric(_cachedMetricVariable);
+
+  const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '')
+    ? String(runtimeNodeData.ptapMetricText)
+    : (_cachedMetricText != null ? String(_cachedMetricText) : null);
   const metricLabel = (runtimeNodeData && runtimeNodeData.ptapMetricLabel != null && runtimeNodeData.ptapMetricLabel !== '') ? String(runtimeNodeData.ptapMetricLabel) : null;
   const isChembeNode = String(runtimeNodeData?.id ?? '').trim() === 'ptap-chembe';
-  const _resolvedExactTag = getExactMackenflocTagForNode({ id: runtimeNodeData && runtimeNodeData.id, label: runtimeNodeData && runtimeNodeData.label }, runtimeNodeData, _ptapMetricsMap);
   const isMackenflocShape = Boolean(_resolvedExactTag && String(_resolvedExactTag).toUpperCase().includes('MACKENFLOC'));
 
   // Respect zero as a valid API value while still suppressing null/undefined.
@@ -4502,13 +4596,18 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           return !removedIds.has(String(entry.id));
         });
 
-        nodesRef.current = savedNodes;
+        // El padre monta DistrictFlow solo cuando tanques + PTAP + captación
+        // ya están listos. Aplicar esos valores ANTES del primer setNodes.
+        const firstPaintNodes = hydrateInitialTankTelemetry(savedNodes);
+        getCachedPtapMetricMap();
+
+        nodesRef.current = firstPaintNodes;
         edgesRef.current = initialEdges;
-        setNodes(savedNodes);
+        setNodes(firstPaintNodes);
         setEdges(initialEdges);
         try {
           const initialDesign = buildDesignHistorySnapshot({
-            nodes: Object.fromEntries((savedNodes || []).map((n) => [n.id, getPersistedNodeEntry(n, (saved && saved.nodes && saved.nodes[n.id]) || {})])),
+            nodes: Object.fromEntries((firstPaintNodes || []).map((n) => [n.id, getPersistedNodeEntry(n, (saved && saved.nodes && saved.nodes[n.id]) || {})])),
             edges: initialEdges,
           });
           savedPastRef.current = [initialDesign];

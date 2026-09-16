@@ -907,10 +907,25 @@ export default function DistrictMap() {
               >✕</button>
             </Box>
           ) : null}
-          {/* Bootstrap only once inside DistrictFlow from the authoritative backend state. */}
-          {(() => {
-            return <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />;
-          })()}
+          {/* No montar el diagrama hasta que tanques + PTAP + captación estén listos.
+              Así Mackenfloc y caudales aparecen en el mismo primer render. */}
+          {loading && !(tanques || []).length ? (
+            <Box sx={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 13,
+              fontWeight: 700,
+              color: '#475569',
+              background: '#f8fafc',
+            }}>
+              Cargando tanques, Mackenfloc y caudales…
+            </Box>
+          ) : (
+            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />
+          )}
           {tooltip ? (
             <Box sx={{ position: 'absolute', pointerEvents: 'none', left: tooltip.x - (containerRef.current?.getBoundingClientRect().left || 0) + 8, top: tooltip.y - (containerRef.current?.getBoundingClientRect().top || 0) + 8, background: 'white', p: 1, borderRadius: 1, boxShadow: 2, fontSize: 12 }}>
               {String(tooltip.content).split('\n').map((l, i) => <div key={i}>{l}</div>)}

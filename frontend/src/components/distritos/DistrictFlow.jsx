@@ -747,45 +747,6 @@ function normalizeCalibrationKey(value) {
     .trim();
 }
 
-function isZeroPercentRejectedForTank(source = {}, value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric !== 0) return false;
-
-  const candidates = [
-    source.id,
-    source.tag,
-    source.apiTag,
-    source.apiName,
-    source.originalName,
-    source.nombre,
-    source.display_name,
-    source.label,
-    source.name,
-  ].filter(Boolean).map((entry) => String(entry).trim());
-
-  if (!candidates.length) return false;
-
-  const normalized = candidates
-    .join(' ')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  const matchesTarget = /(calucaima|miramar|zona industrial)/.test(normalized) || /nive.*(calucaima|miramar|zona industrial)/.test(normalized);
-  if (!matchesTarget) return false;
-
-  const nivel = Number.isFinite(Number(source.valor_m)) ? Number(source.valor_m)
-    : (Number.isFinite(Number(source.nivel)) ? Number(source.nivel) : null);
-  const altura = Number.isFinite(Number(source.altura_rebose_calibrada)) ? Number(source.altura_rebose_calibrada)
-    : (Number.isFinite(Number(source.altura_rebose_m)) ? Number(source.altura_rebose_m)
-      : (Number.isFinite(Number(source.altura_rebose)) ? Number(source.altura_rebose) : null));
-
-  return nivel != null && nivel > 0 && altura != null && altura > 0;
-}
-
 function getCalibratedReboseHeight(source = {}) {
   const candidates = [
     source.tag,
@@ -829,10 +790,7 @@ function enrichTankNodeMetrics(data = {}) {
 
   const usableExplicitValue = (value) => {
     if (value === null || value === undefined || value === '') return false;
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return false;
-    if (numeric !== 0) return true;
-    return !isZeroPercentRejectedForTank(source, value);
+    return Number.isFinite(Number(value));
   };
 
   const ibalPct = usableExplicitValue(source.porcentaje_capacidad) ? Number(source.porcentaje_capacidad)
@@ -841,7 +799,7 @@ function enrichTankNodeMetrics(data = {}) {
 
   const manualPct = Number.isFinite(Number(source.manual_porcentaje)) ? Number(source.manual_porcentaje)
     : (Number.isFinite(Number(source.manualPorcentaje)) ? Number(source.manualPorcentaje) : null);
-  const normalizedManualPct = manualPct === 0 && isZeroPercentRejectedForTank(source, manualPct) ? null : manualPct;
+  const normalizedManualPct = manualPct;
   const manualRebose = Number.isFinite(Number(source.manual_rebose_override)) ? Number(source.manual_rebose_override)
     : (Number.isFinite(Number(source.manualReboseOverride)) ? Number(source.manualReboseOverride) : null);
 

@@ -570,7 +570,17 @@ export default function DistrictMap() {
               startIcon={<LinkIcon />}
               variant={editTool === 'connect' && !deleteMode ? 'contained' : 'outlined'}
               color="primary"
-              onClick={() => { setEditTool('connect'); setDeleteMode(false); }}
+              onClick={() => {
+                setDeleteMode(false);
+                setEditTool('connect');
+                setDiagramLocked(false);
+                setDiagramMode('edit');
+                try {
+                  localStorage.setItem('district_diagram_mode', 'edit');
+                  localStorage.setItem('district_locked', '0');
+                } catch (e) {}
+                flowRef.current?.editUnlockAllNodes?.();
+              }}
             >
               Conectar
             </Button>

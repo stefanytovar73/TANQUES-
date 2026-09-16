@@ -740,6 +740,55 @@ function getMetricConfigForNodeId(nodeId, nodeData = {}) {
   return null;
 }
 
+function getSpecialOperationalVariables(response) {
+  if (!response || typeof response !== 'object') return [];
+  if (Array.isArray(response)) return response;
+  const candidates = [
+    response.variables,
+    response.ptap,
+    response.captacion,
+    response.data?.variables,
+    response.data?.ptap,
+    response.data?.captacion,
+  ];
+  return candidates.find((candidate) => Array.isArray(candidate)) || [];
+}
+
+function findSpecialOperationalVariable(response, config = {}) {
+  const variables = getSpecialOperationalVariables(response);
+  if (!variables.length) return null;
+
+  const tags = [
+    ...(Array.isArray(config.tags) ? config.tags : []),
+    ...(config.tag ? [config.tag] : []),
+  ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+
+  const exact = variables.find((item) => item && tags.includes(String(item.tag || '').trim().toUpperCase()));
+  if (exact) return exact;
+
+  const keywordSets = Array.isArray(config.keywords) ? config.keywords : [];
+  return variables.find((item) => {
+    const haystack = normalizeMetricLabelKey([
+      item?.tag, item?.nombre, item?.name, item?.label, item?.descripcion, item?.description,
+    ].filter(Boolean).join(' '));
+    return keywordSets.some((keywords) =>
+      Array.isArray(keywords) && keywords.length &&
+      keywords.every((keyword) => haystack.includes(normalizeMetricLabelKey(keyword)))
+    );
+  }) || null;
+}
+
+function formatSpecialOperationalMetric(variable, fallbackUnit = 'L/s') {
+  if (!variable) return `0 ${fallbackUnit}`;
+  const raw = variable.valor ?? variable.value ?? variable.caudal ?? variable.lectura ?? null;
+  const numeric = parseMetricNumber(raw);
+  if (numeric == null) return `0 ${variable.unidad || variable.unit || fallbackUnit}`;
+  const valueText = Number.isInteger(numeric)
+    ? String(Math.round(numeric))
+    : numeric.toFixed(2).replace(/\.0+$|(?<=\.\d)0+$/g, '');
+  return `${valueText} ${variable.unidad || variable.unit || fallbackUnit}`.trim();
+}
+
 function findFlowMetricVariable(response, config = {}) {
   const variables = Array.isArray(response?.variables) ? response.variables : [];
   if (!variables.length) return null;
@@ -800,10 +849,21 @@ async function loadFlowMetricForNodeId(nodeId, nodeData = {}) {
   const config = getMetricConfigForNodeId(nodeId, nodeData);
   if (!config) return null;
 
+  const key = String(nodeId || '').trim();
+  const cayOrCocora = key === 'ptap-chembe' || key === 'forma-1788988205128-xhpu4';
+
   try {
     const responses = config.service === 'any'
       ? await Promise.all([tanqueService.getPtap(), tanqueService.getCaptacion()])
       : [config.service === 'ptap' ? await tanqueService.getPtap() : await tanqueService.getCaptacion()];
+
+    if (cayOrCocora) {
+      for (const response of responses) {
+        const variable = findSpecialOperationalVariable(response, config);
+        if (variable) return formatSpecialOperationalMetric(variable, config.defaultUnit || 'L/s');
+      }
+      return `0 ${config.defaultUnit || 'L/s'}`;
+    }
 
     for (const response of responses) {
       const variable = findFlowMetricVariable(response, config);
@@ -811,7 +871,7 @@ async function loadFlowMetricForNodeId(nodeId, nodeData = {}) {
     }
     return null;
   } catch (error) {
-    return null;
+    return cayOrCocora ? `0 ${config.defaultUnit || 'L/s'}` : null;
   }
 }
 
@@ -819,10 +879,21 @@ function getCachedFlowMetricForNodeId(nodeId, nodeData = {}) {
   const config = getMetricConfigForNodeId(nodeId, nodeData);
   if (!config) return null;
 
+  const key = String(nodeId || '').trim();
+  const cayOrCocora = key === 'ptap-chembe' || key === 'forma-1788988205128-xhpu4';
+
   try {
     const responses = config.service === 'any'
       ? [tanqueService.peekPtap?.(), tanqueService.peekCaptacion?.()]
       : [config.service === 'ptap' ? tanqueService.peekPtap?.() : tanqueService.peekCaptacion?.()];
+
+    if (cayOrCocora) {
+      for (const response of responses) {
+        const variable = findSpecialOperationalVariable(response, config);
+        if (variable) return formatSpecialOperationalMetric(variable, config.defaultUnit || 'L/s');
+      }
+      return `0 ${config.defaultUnit || 'L/s'}`;
+    }
 
     for (const response of responses) {
       const variable = findFlowMetricVariable(response, config);
@@ -830,7 +901,7 @@ function getCachedFlowMetricForNodeId(nodeId, nodeData = {}) {
     }
     return null;
   } catch (error) {
-    return null;
+    return cayOrCocora ? `0 ${config.defaultUnit || 'L/s'}` : null;
   }
 }
 
@@ -1111,6 +1182,72 @@ function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68 }) {
             <Handle type="target" position={Position.Top} id={`t-top-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top }} />
             <Handle type="source" position={Position.Bottom} id={`s-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
             <Handle type="target" position={Position.Bottom} id={`t-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function getRotatedConnectBounds({ left = 0, right = 120, top = 0, bottom = 68, rotation = 0 }) {
+  const l = Number(left);
+  const r = Number(right);
+  const t = Number(top);
+  const b = Number(bottom);
+  const cx = (l + r) / 2;
+  const cy = (t + b) / 2;
+  const rad = (Number(rotation) || 0) * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const corners = [
+    [l, t], [r, t], [r, b], [l, b],
+  ].map(([x, y]) => {
+    const dx = x - cx;
+    const dy = y - cy;
+    return {
+      x: cx + (dx * cos - dy * sin),
+      y: cy + (dx * sin + dy * cos),
+    };
+  });
+
+  return {
+    left: Math.min(...corners.map((p) => p.x)),
+    right: Math.max(...corners.map((p) => p.x)),
+    top: Math.min(...corners.map((p) => p.y)),
+    bottom: Math.max(...corners.map((p) => p.y)),
+  };
+}
+
+function FreeConnectHandles({ left = 0, right = 120, top = 0, bottom = 68, rotation = 0, visible = false }) {
+  const bounds = getRotatedConnectBounds({ left, right, top, bottom, rotation });
+  const width = Math.max(1, bounds.right - bounds.left);
+  const height = Math.max(1, bounds.bottom - bounds.top);
+  const style = {
+    width: 8,
+    height: 8,
+    background: '#2563eb',
+    border: '2px solid #ffffff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.30)',
+    borderRadius: '50%',
+    zIndex: 24,
+    opacity: visible ? 1 : 0,
+    pointerEvents: visible ? 'auto' : 'none',
+  };
+
+  // ConnectionMode="loose" lets a source handle work both as origin and destination.
+  // That removes the old left/top/right/bottom restrictions while keeping saved
+  // legacy handles untouched for existing edges.
+  return (
+    <>
+      {AUTO_PORT_FRACTIONS.map((fraction, index) => {
+        const y = bounds.top + (height * fraction);
+        const x = bounds.left + (width * fraction);
+        return (
+          <React.Fragment key={index}>
+            <Handle type="source" position={Position.Left} id={`free-left-${index}`} style={{ ...style, left: bounds.left, top: y }} />
+            <Handle type="source" position={Position.Right} id={`free-right-${index}`} style={{ ...style, left: bounds.right, top: y }} />
+            <Handle type="source" position={Position.Top} id={`free-top-${index}`} style={{ ...style, left: x, top: bounds.top }} />
+            <Handle type="source" position={Position.Bottom} id={`free-bottom-${index}`} style={{ ...style, left: x, top: bounds.bottom }} />
           </React.Fragment>
         );
       })}
@@ -1674,8 +1811,8 @@ function FlowTankNode(props) {
     width: 10, height: 10, background: '#2563eb',
     border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
     borderRadius: '50%', zIndex: 10,
-    opacity: editMode && mode === 'connect' ? 1 : 0,
-    pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none',
+    opacity: 0,
+    pointerEvents: 'none',
   };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
@@ -1705,7 +1842,7 @@ function FlowTankNode(props) {
   const bottomRightHandle = rotatePoint(innerOffsetX + 92 * tankScale, innerOffsetY + 114 * tankScale, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
       {/* Handles — solo visibles en editMode */}
       <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
@@ -1722,6 +1859,14 @@ function FlowTankNode(props) {
         right={innerOffsetX + 100 * tankScale}
         top={innerOffsetY + 36 * tankScale}
         bottom={innerOffsetY + 126 * tankScale}
+      />
+      <FreeConnectHandles
+        left={innerOffsetX + 20 * tankScale}
+        right={innerOffsetX + 100 * tankScale}
+        top={innerOffsetY + 36 * tankScale}
+        bottom={innerOffsetY + 126 * tankScale}
+        rotation={rotation}
+        visible={editMode && mode === 'connect'}
       />
 
       <div style={{ width: tankWidth, height: tankHeight, overflow: 'visible' }}>
@@ -1877,8 +2022,8 @@ function FlowPlantNode(props) {
     boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
     borderRadius: '50%',
     zIndex: 10,
-    opacity: editMode && mode === 'connect' ? 1 : 0,
-    pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none',
+    opacity: 0,
+    pointerEvents: 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -1896,12 +2041,13 @@ function FlowPlantNode(props) {
   const bottomHandle = rotatePoint(cx, h - 14, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
       <AutoInvisibleHandles left={6} right={w - 6} top={14} bottom={h - 14} />
+      <FreeConnectHandles left={10} right={w - 10} top={18} bottom={h - 18} rotation={rotation} visible={editMode && mode === 'connect'} />
 
       <div style={{ width: 200, height: 80, overflow: 'visible' }}>
         <svg width={200} height={80}>
@@ -2057,8 +2203,8 @@ function FlowDistrictNode(props) {
     boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
     borderRadius: '50%',
     zIndex: 10,
-    opacity: editMode && mode === 'connect' ? 1 : 0,
-    pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none',
+    opacity: 0,
+    pointerEvents: 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -2076,12 +2222,13 @@ function FlowDistrictNode(props) {
   const bottomHandle = rotatePoint(cx, h - 4, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
       <AutoInvisibleHandles left={6} right={w - 6} top={4} bottom={h - 4} />
+      <FreeConnectHandles left={4} right={w - 4} top={4} bottom={h - 4} rotation={rotation} visible={editMode && mode === 'connect'} />
 
       <div style={{ width: 160, height: 48, overflow: 'visible' }}>
         <svg width={160} height={48}>
@@ -2218,7 +2365,7 @@ function FlowShapeNode(props) {
   };
 
   const isPending = Boolean(data && data.pendingConnect);
-  const handleStyle = { width: 10, height: 10, background: safeColor, border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', borderRadius: '50%', zIndex: 10, opacity: editMode && mode === 'connect' ? 1 : 0, pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none' };
+  const handleStyle = { width: 10, height: 10, background: safeColor, border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', borderRadius: '50%', zIndex: 10, opacity: 0, pointerEvents: 'none' };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
   const renderShape = () => {
@@ -2273,12 +2420,13 @@ function FlowShapeNode(props) {
   };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={handleStyle} />
       <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
       <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={handleStyle} />
       <AutoInvisibleHandles left={2} right={width - 2} top={2} bottom={height - 2} />
+      <FreeConnectHandles left={2} right={width - 2} top={2} bottom={height - 2} rotation={Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0} visible={editMode && mode === 'connect'} />
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
         <g transform={`translate(${width / 2}, ${height / 2}) rotate(${Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0}) translate(${-width / 2}, ${-height / 2})`}>
           {renderShape()}
@@ -5835,6 +5983,16 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           const nextId = node?.id || null;
           _setSelectedNodeId(nextId);
           if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: false });
+        }}
+        onNodeDoubleClick={(event, node) => {
+          try {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+          } catch (e) {}
+          if (!node || mode === 'connect' || deleteMode) return;
+          const nextId = node.id || null;
+          _setSelectedNodeId(nextId);
+          if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: true });
         }}
         onSelectionChange={({ nodes: selectedNodes = [] }) => {
           const shouldSuppress = dragMovedRef.current || suppressClickAfterDragRef.current || suppressSelectionAfterDragRef.current || Date.now() < dragSuppressUntilRef.current;

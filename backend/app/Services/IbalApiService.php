@@ -12,6 +12,11 @@ class IbalApiService
     {
         $cacheKey = __METHOD__;
 
+        $cached = Cache::get($cacheKey);
+        if ($cached) {
+            return $cached;
+        }
+
         try {
             $response = Http::retry(2, 100)->withHeaders([
                 'X-API-Key' => env('IBAL_API_KEY')

@@ -3,14 +3,69 @@ import api from "../api/axios";
 let cache = null;
 let cacheExpiresAt = 0;
 let pendingRequest = null;
-const CACHE_TTL_MS = 30000;
 
-const tankServiceInternal = {};
+const CACHE_TTL_MS = 30000;
+const LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const STORAGE_KEYS = {
+  tanquesFresh: 'tanques_api_fresh_v1',
+  tanquesLast: 'tanques_api_last_v1',
+  captacionFresh: 'captacion_api_fresh_v1',
+  captacionLast: 'captacion_api_last_v1',
+  ptapFresh: 'ptap_api_fresh_v1',
+  ptapLast: 'ptap_api_last_v1',
+};
+
+const tankServiceInternal = {
+  captacionCache: null,
+  captacionExpiresAt: 0,
+  captacionPending: null,
+  ptapCache: null,
+  ptapExpiresAt: 0,
+  ptapPending: null,
+};
+
+const readStored = (storage, key, maxAgeMs = null) => {
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !Object.prototype.hasOwnProperty.call(parsed, 'data')) return null;
+
+    const savedAt = Number(parsed.savedAt || 0);
+    if (maxAgeMs != null && (!savedAt || Date.now() - savedAt > maxAgeMs)) return null;
+    if (parsed.expiresAt != null && Date.now() >= Number(parsed.expiresAt)) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+};
+
+const writeStored = (storage, key, data, expiresAt = null) => {
+  try {
+    storage.setItem(key, JSON.stringify({
+      data,
+      savedAt: Date.now(),
+      ...(expiresAt != null ? { expiresAt } : {}),
+    }));
+  } catch {
+    // El caché es solo una optimización.
+  }
+};
+
+const readFreshSession = (key) => {
+  try { return readStored(sessionStorage, key); } catch { return null; }
+};
+const readLastKnown = (key) => {
+  try { return readStored(localStorage, key, LAST_KNOWN_MAX_AGE_MS); } catch { return null; }
+};
 
 const invalidateCache = () => {
   cache = null;
   cacheExpiresAt = 0;
   pendingRequest = null;
+  try { sessionStorage.removeItem(STORAGE_KEYS.tanquesFresh); } catch {}
+  try { localStorage.removeItem(STORAGE_KEYS.tanquesLast); } catch {}
 };
 
 const normalizeTanquesResponse = (payload) => {
@@ -36,118 +91,161 @@ const normalizeTanquesResponse = (payload) => {
   return payload;
 };
 
+const getMetric = async ({ kind, url, freshKey, lastKey, initialWindowKey, forceRefresh = false }) => {
+  const cacheKey = `${kind}Cache`;
+  const expiresKey = `${kind}ExpiresAt`;
+  const pendingKey = `${kind}Pending`;
+  const now = Date.now();
+
+  if (!forceRefresh && tankServiceInternal[cacheKey] && now < tankServiceInternal[expiresKey]) {
+    return tankServiceInternal[cacheKey];
+  }
+
+  if (!forceRefresh && !tankServiceInternal[cacheKey]) {
+    try {
+      const initial = typeof window !== 'undefined' ? window[initialWindowKey] : null;
+      if (initial) {
+        tankServiceInternal[cacheKey] = initial;
+        tankServiceInternal[expiresKey] = now + CACHE_TTL_MS;
+        return initial;
+      }
+    } catch {}
+
+    const fresh = readFreshSession(freshKey);
+    if (fresh) {
+      tankServiceInternal[cacheKey] = fresh;
+      tankServiceInternal[expiresKey] = now + CACHE_TTL_MS;
+      return fresh;
+    }
+  }
+
+  // Nunca duplicar una llamada en curso; todos los consumidores comparten la misma promesa.
+  if (tankServiceInternal[pendingKey]) return tankServiceInternal[pendingKey];
+
+  tankServiceInternal[pendingKey] = api.get(url)
+    .then((res) => {
+      const data = res.data;
+      const expiresAt = Date.now() + CACHE_TTL_MS;
+      tankServiceInternal[cacheKey] = data;
+      tankServiceInternal[expiresKey] = expiresAt;
+      writeStored(sessionStorage, freshKey, data, expiresAt);
+      writeStored(localStorage, lastKey, data);
+      return data;
+    })
+    .finally(() => {
+      tankServiceInternal[pendingKey] = null;
+    });
+
+  return tankServiceInternal[pendingKey];
+};
+
+const peekMetric = (kind, freshKey, lastKey) => {
+  const cacheKey = `${kind}Cache`;
+  const expiresKey = `${kind}ExpiresAt`;
+  if (tankServiceInternal[cacheKey] && Date.now() < tankServiceInternal[expiresKey]) {
+    return tankServiceInternal[cacheKey];
+  }
+  return readFreshSession(freshKey) || readLastKnown(lastKey);
+};
+
 const tanqueService = {
   getTanques: async (forceRefresh = false) => {
     const now = Date.now();
-    if (!forceRefresh && cache && now < cacheExpiresAt) {
-      return cache;
-    }
+    if (!forceRefresh && cache && now < cacheExpiresAt) return cache;
 
-    // If the page included an early inline fetch, reuse its payload to avoid extra network delays.
-    try {
-      if (!forceRefresh && !cache && typeof window !== 'undefined' && window.__INITIAL_TANQUES) {
-        cache = window.__INITIAL_TANQUES;
-        cacheExpiresAt = Date.now() + CACHE_TTL_MS;
+    if (!forceRefresh && !cache) {
+      try {
+        if (typeof window !== 'undefined' && window.__INITIAL_TANQUES) {
+          cache = normalizeTanquesResponse(window.__INITIAL_TANQUES);
+          cacheExpiresAt = now + CACHE_TTL_MS;
+          return cache;
+        }
+      } catch {}
+
+      const fresh = readFreshSession(STORAGE_KEYS.tanquesFresh);
+      if (fresh) {
+        cache = normalizeTanquesResponse(fresh);
+        cacheExpiresAt = now + CACHE_TTL_MS;
         return cache;
       }
-    } catch (e) {}
-
-    if (pendingRequest && !forceRefresh) {
-      return pendingRequest;
     }
 
-    pendingRequest = api.get("/tanques").then((response) => {
-      const payload = normalizeTanquesResponse(response.data);
-      cache = payload;
-      cacheExpiresAt = Date.now() + CACHE_TTL_MS;
-      pendingRequest = null;
-      return cache;
-    }).catch((error) => {
-      cache = null;
-      cacheExpiresAt = 0;
-      pendingRequest = null;
-      throw error;
-    });
+    if (pendingRequest) return pendingRequest;
+
+    pendingRequest = api.get("/tanques")
+      .then((response) => {
+        cache = normalizeTanquesResponse(response.data);
+        cacheExpiresAt = Date.now() + CACHE_TTL_MS;
+        writeStored(sessionStorage, STORAGE_KEYS.tanquesFresh, cache, cacheExpiresAt);
+        writeStored(localStorage, STORAGE_KEYS.tanquesLast, cache);
+        return cache;
+      })
+      .finally(() => {
+        pendingRequest = null;
+      });
 
     return pendingRequest;
   },
 
-  getCaptacion: async (forceRefresh = false) => {
-    // cache específico para captacion
-    if (!tankServiceInternal.captacionCache) {
-      tankServiceInternal.captacionCache = null;
-      tankServiceInternal.captacionExpiresAt = 0;
-      tankServiceInternal.captacionPending = null;
-    }
-
-    const now = Date.now();
-    if (!forceRefresh && tankServiceInternal.captacionCache && now < tankServiceInternal.captacionExpiresAt) {
-      return tankServiceInternal.captacionCache;
-    }
-
-    if (tankServiceInternal.captacionPending && !forceRefresh) {
-      return tankServiceInternal.captacionPending;
-    }
-
-    tankServiceInternal.captacionPending = api.get('/caudales/captacion').then((res) => {
-      tankServiceInternal.captacionCache = res.data;
-      tankServiceInternal.captacionExpiresAt = Date.now() + CACHE_TTL_MS;
-      tankServiceInternal.captacionPending = null;
-      return tankServiceInternal.captacionCache;
-    }).catch((err) => { tankServiceInternal.captacionPending = null; throw err; });
-
-    return tankServiceInternal.captacionPending;
+  peekTanques: () => {
+    if (cache && Date.now() < cacheExpiresAt) return cache;
+    const candidate = readFreshSession(STORAGE_KEYS.tanquesFresh) || readLastKnown(STORAGE_KEYS.tanquesLast);
+    try { return candidate ? normalizeTanquesResponse(candidate) : null; } catch { return null; }
   },
 
-  getPtap: async (forceRefresh = false) => {
-    if (!tankServiceInternal.ptapCache) {
-      tankServiceInternal.ptapCache = null;
-      tankServiceInternal.ptapExpiresAt = 0;
-      tankServiceInternal.ptapPending = null;
-    }
+  getCaptacion: async (forceRefresh = false) => getMetric({
+    kind: 'captacion',
+    url: '/caudales/captacion',
+    freshKey: STORAGE_KEYS.captacionFresh,
+    lastKey: STORAGE_KEYS.captacionLast,
+    initialWindowKey: '__INITIAL_CAPTACION',
+    forceRefresh,
+  }),
 
-    const now = Date.now();
-    if (!forceRefresh && tankServiceInternal.ptapCache && now < tankServiceInternal.ptapExpiresAt) {
-      return tankServiceInternal.ptapCache;
-    }
+  peekCaptacion: () => peekMetric('captacion', STORAGE_KEYS.captacionFresh, STORAGE_KEYS.captacionLast),
 
-    // Reuse inline-initialized PTAP payload if available to avoid duplicated network delay.
-    try {
-      if (!forceRefresh && !tankServiceInternal.ptapCache && typeof window !== 'undefined' && window.__INITIAL_PTAP) {
-        tankServiceInternal.ptapCache = window.__INITIAL_PTAP;
-        tankServiceInternal.ptapExpiresAt = Date.now() + CACHE_TTL_MS;
-        return tankServiceInternal.ptapCache;
-      }
-    } catch (e) {}
+  getPtap: async (forceRefresh = false) => getMetric({
+    kind: 'ptap',
+    url: '/caudales/ptap',
+    freshKey: STORAGE_KEYS.ptapFresh,
+    lastKey: STORAGE_KEYS.ptapLast,
+    initialWindowKey: '__INITIAL_PTAP',
+    forceRefresh,
+  }),
 
-    if (tankServiceInternal.ptapPending && !forceRefresh) {
-      return tankServiceInternal.ptapPending;
-    }
+  peekPtap: () => peekMetric('ptap', STORAGE_KEYS.ptapFresh, STORAGE_KEYS.ptapLast),
 
-    tankServiceInternal.ptapPending = api.get('/caudales/ptap').then((res) => {
-      tankServiceInternal.ptapCache = res.data;
-      tankServiceInternal.ptapExpiresAt = Date.now() + CACHE_TTL_MS;
-      tankServiceInternal.ptapPending = null;
-      return tankServiceInternal.ptapCache;
-    }).catch((err) => { tankServiceInternal.ptapPending = null; throw err; });
-
-    return tankServiceInternal.ptapPending;
+  // Inicia las tres fuentes de Distritos al mismo tiempo.
+  preloadDistrictData: async (forceRefresh = false) => {
+    const [tanques, captacion, ptap] = await Promise.allSettled([
+      tanqueService.getTanques(forceRefresh),
+      tanqueService.getCaptacion(forceRefresh),
+      tanqueService.getPtap(forceRefresh),
+    ]);
+    return {
+      tanques: tanques.status === 'fulfilled' ? tanques.value : null,
+      captacion: captacion.status === 'fulfilled' ? captacion.value : null,
+      ptap: ptap.status === 'fulfilled' ? ptap.value : null,
+    };
   },
 
   getTanqueById: async (id) => {
     const response = await api.get(`/tanques/${id}`);
     return response.data;
   },
+
   createTanque: async (payload) => {
     invalidateCache();
     const response = await api.post('/tanques', payload);
     return response.data;
   },
+
   updateTanque: async (id, payload) => {
     invalidateCache();
     const response = await api.put(`/tanques/${id}`, payload);
     return response.data;
   },
+
   deleteTanque: async (id) => {
     invalidateCache();
     const response = await api.delete(`/tanques/${id}`);

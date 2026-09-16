@@ -639,8 +639,9 @@ export default function DistrictMap() {
                       setDeleteMode(false);
                       const activeId = flowRef.current?.getSelectedNodeId?.() || selectedId || null;
                       if (!activeId) return;
-                      flowRef.current?.changeSelectedNodeShape?.(activeId, s.type);
+                      const changed = flowRef.current?.changeSelectedNodeShape?.(activeId, s.type);
                       setShowChangeShapePicker(false);
+                      if (changed) setSnack({ open: true, msg: 'Figura cambiada y guardada' });
                     }} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, padding: 6, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, transition: 'background 0.15s' }} onMouseEnter={e => e.currentTarget.style.background = '#dbeafe'} onMouseLeave={e => e.currentTarget.style.background = '#f8fafc'}>
                       <svg width="24" height="24" viewBox="0 0 24 24">{s.svg}</svg>
                       <span style={{ fontSize: 9, color: '#475569', fontWeight: 600, textAlign: 'center', lineHeight: 1.1 }}>{s.label}</span>
@@ -693,28 +694,24 @@ export default function DistrictMap() {
                 const tid = selectedId || flowRef.current?.getSelectedNodeId?.();
                 flowRef.current?.resizeSelectedNode?.(tid, -10, -10);
                 setSnack({ open: true, msg: 'Tamaño - aplicado' });
-                setUnsavedChanges(true);
               }}>Tamaño -</Button>
               <Button size="small" variant="outlined" color="secondary" onClick={() => {
                 setDeleteMode(false);
                 const tid = selectedId || flowRef.current?.getSelectedNodeId?.();
                 flowRef.current?.resizeSelectedNode?.(tid, 10, 10);
                 setSnack({ open: true, msg: 'Tamaño + aplicado' });
-                setUnsavedChanges(true);
               }}>Tamaño +</Button>
               <Button size="small" variant="outlined" color="warning" onClick={() => {
                 setDeleteMode(false);
                 const tid = selectedId || flowRef.current?.getSelectedNodeId?.();
                 flowRef.current?.rotateSelectedNode?.(tid, 'left');
                 setSnack({ open: true, msg: 'Rotado -90°' });
-                setUnsavedChanges(true);
               }}>↺</Button>
               <Button size="small" variant="outlined" color="warning" onClick={() => {
                 setDeleteMode(false);
                 const tid = selectedId || flowRef.current?.getSelectedNodeId?.();
                 flowRef.current?.rotateSelectedNode?.(tid, 'right');
                 setSnack({ open: true, msg: 'Rotado +90°' });
-                setUnsavedChanges(true);
               }}>↻</Button>
             </Box>
 

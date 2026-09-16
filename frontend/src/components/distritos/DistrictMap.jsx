@@ -53,7 +53,7 @@ const SHAPE_MENU_OPTIONS = [
 ];
 
 export default function DistrictMap() {
-  const { tanques, loading, error } = useTanques();
+  const { tanques, loading, error, telemetryVersion } = useTanques();
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -924,7 +924,7 @@ export default function DistrictMap() {
               Cargando tanques, Mackenfloc y caudales…
             </Box>
           ) : (
-            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />
+            <DistrictFlow ref={flowRef} apiError={Boolean(error)} telemetryVersion={telemetryVersion} onNodeSelect={handleNodeSelect} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />
           )}
           {tooltip ? (
             <Box sx={{ position: 'absolute', pointerEvents: 'none', left: tooltip.x - (containerRef.current?.getBoundingClientRect().left || 0) + 8, top: tooltip.y - (containerRef.current?.getBoundingClientRect().top || 0) + 8, background: 'white', p: 1, borderRadius: 1, boxShadow: 2, fontSize: 12 }}>

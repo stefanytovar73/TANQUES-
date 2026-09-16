@@ -41,8 +41,6 @@ const COLOR_PRESETS = [
 
 export default function DistrictMap() {
   const { tanques, loading, error } = useTanques();
-  try { console.debug('[DISTRICT DEBUG] useTanques returned:', Array.isArray(tanques) ? tanques.length : typeof tanques); } catch (e) {}
-  try { console.debug('[DISTRICT DEBUG] STATIC_NODES count:', Array.isArray(STATIC_NODES) ? STATIC_NODES.length : typeof STATIC_NODES); } catch (e) {}
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -584,6 +582,24 @@ export default function DistrictMap() {
             </div>
             <Button
               size="small"
+              variant="outlined"
+              color="warning"
+              disabled={!selectedId}
+              onClick={() => {
+                setDeleteMode(false);
+                const targetId = selectedId || flowRef.current?.getSelectedNodeId?.();
+                const next = flowRef.current?.changeSelectedNodeFigure?.(targetId);
+                if (next) {
+                  setSnack({ open: true, msg: 'Figura cambiada y guardada' });
+                } else {
+                  setSnack({ open: true, msg: 'Selecciona un elemento para cambiar su figura' });
+                }
+              }}
+            >
+              Cambiar figura
+            </Button>
+            <Button
+              size="small"
               variant={deleteMode ? 'contained' : 'outlined'}
               color="error"
               onClick={() => { setDeleteMode(m => !m); setEditTool('select'); }}
@@ -665,7 +681,12 @@ export default function DistrictMap() {
                 onClick={() => {
                   flowRef.current?.editUnlockAllNodes?.();
                   setDiagramMode('edit');
-                  try { localStorage.setItem('district_diagram_mode', 'edit'); } catch (e) {}
+                  setDiagramLocked(false);
+                  try {
+                    localStorage.setItem('district_diagram_mode', 'edit');
+                    localStorage.setItem('district_locked', '0');
+                  } catch (e) {}
+                  setSnack({ open: true, msg: 'Mover activado: elementos desbloqueados' });
                 }}
                 sx={{ fontWeight: 700, minWidth: 80 }}
               >
@@ -682,7 +703,14 @@ export default function DistrictMap() {
                 onClick={() => {
                   flowRef.current?.saveAndLockAllNodes?.();
                   flowRef.current?.doSave?.();
-                  setSnack({ open: true, msg: '✓ Diagrama guardado' });
+                  setDiagramMode('view');
+                  setDiagramLocked(true);
+                  try {
+                    localStorage.setItem('district_diagram_mode', 'view');
+                    localStorage.setItem('district_locked', '1');
+                  } catch (e) {}
+                  setUnsavedChanges(false);
+                  setSnack({ open: true, msg: '✓ Diagrama guardado y posiciones bloqueadas' });
                 }}
                 sx={{ fontWeight: 700, minWidth: 90 }}
               >
@@ -769,7 +797,6 @@ export default function DistrictMap() {
           ) : null}
           {/* Ensure we always pass at least the STATIC_NODES as fallback so the map shows even if API data is missing */}
           {(() => {
-            try { console.debug('[DISTRICT DEBUG] Passing nodesTo DistrictFlow count:', flowNodes.length, flowNodes.map(n => n.id)); } catch (e) {}
             return <DistrictFlow ref={flowRef} initialNodes={flowNodes} initialEdges={resolvedConnections} apiError={Boolean(error)} onNodeSelect={(id) => { setSelectedId(id); setSelectedEdgeId(null); }} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />;
           })()}
           {tooltip ? (

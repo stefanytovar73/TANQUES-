@@ -535,6 +535,7 @@ export default function DistrictMap() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5, borderRadius: 1, border: '1px solid #cbd5e1', background: '#fff' }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginRight: 2 }}>Línea:</span>
               {[
+                { value: 'smart', label: 'Auto', icon: '└─' },
                 { value: 'straight', label: 'Recta', icon: '─' },
                 { value: 'default', label: 'Curva', icon: '⌒' },
                 { value: 'smoothstep', label: 'Suave', icon: '⌣' },

@@ -6,10 +6,9 @@ const ALTURAS_REBOSE_CALIBRADAS = {
   "Ambala 1": 7.582,
   "Ambala 2": 7.693,
   "Alsacia": 2.500,
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
-  "Calucaima": 5.0243902439,
+  // Referencia confirmada contra el dashboard oficial IBAL (16-09-2026):
+  // Calucaima 4.02 m -> 67%, equivalente a una referencia de 6.00 m.
+  "Calucaima": 6.0,
   // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
   // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
   // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
@@ -29,11 +28,10 @@ const ALTURAS_REBOSE_CALIBRADAS = {
   "La 30": 7.0185185185,
   "Tanque 30": 7.0185185185,
   "Tanque La 30": 7.0185185185,
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
-  "Miramar": 7.46875,
-  "Zona Industrial": 16.77777777777778,
+  // Referencias confirmadas contra el dashboard oficial IBAL (16-09-2026):
+  // Miramar 4.75 m -> 79% y Zona Industrial 2.72 m -> 45%, ambas sobre 6.00 m.
+  "Miramar": 6.0,
+  "Zona Industrial": 6.0,
   "Picaleña 1": 4.364,
   "Picaleña 2": 5.696,
 };

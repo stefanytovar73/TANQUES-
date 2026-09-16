@@ -1871,7 +1871,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
     const currentData = currentNode.data?.nodeData || currentNode.data || {};
     const currentType = currentNode.type || currentData.type || 'tank';
-    const currentShape = currentData.shapeType || (currentType === 'tank' ? 'cylinder' : 'rect');
+    const currentShape = currentType === 'tank'
+      ? 'cylinder'
+      : (currentType === 'plant' || currentType === 'district'
+        ? 'rect'
+        : (currentData.shapeType || 'rect'));
     const currentIndex = presets.findIndex((preset) => preset.type === currentType && preset.shapeType === currentShape);
     const nextPreset = presets[(currentIndex >= 0 ? currentIndex + 1 : 0) % presets.length];
 

@@ -1723,6 +1723,28 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const edgesRef = useRef([]);
   const draftPositionsRef = useRef(new Map());
   const activeDragNodeIdRef = useRef(null);
+
+  // Una única fuente de verdad para el arrastre. En modo Mover ningún
+  // lockedPosition/draggable antiguo puede dejar un elemento "tieso".
+  useEffect(() => {
+    const shouldDrag = diagramMode === 'edit';
+    setNodes((current) => {
+      let changed = false;
+      const updated = (current || []).map((n) => {
+        const source = n.data?.nodeData || n.data || {};
+        if (n.draggable === shouldDrag && Boolean(source.lockedPosition) === !shouldDrag) return n;
+        changed = true;
+        const nodeData = { ...source, lockedPosition: !shouldDrag };
+        return {
+          ...n,
+          draggable: shouldDrag,
+          data: { ...(n.data || {}), lockedPosition: !shouldDrag, nodeData },
+        };
+      });
+      if (changed) nodesRef.current = updated;
+      return changed ? updated : current;
+    });
+  }, [diagramMode]);
   // Ref estable para onNodeSelect — evita recrear callbacks cuando el padre re-renderiza
   const onNodeSelectRef = useRef(onNodeSelect);
   useEffect(() => { onNodeSelectRef.current = onNodeSelect; }, [onNodeSelect]);
@@ -1740,15 +1762,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       const before = nds.map(n => ({ id: n.id, position: n.position }));
       pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
       futureRef.current = [];
-      const updated = nds.map(n => n.id === id ? ({ ...n, position: { x: (n.position.x || 0) + dx, y: (n.position.y || 0) + dy } }) : n);
-      try {
-        // Do not persist on each immediate move; mark as dirty so the parent UI
-        // can show "Cambios no guardados". Actual persistence happens on explicit save.
-        try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
-      } catch (e) {}
+      const updated = nds.map(n => n.id === id ? ({
+        ...n,
+        position: { x: (n.position.x || 0) + dx, y: (n.position.y || 0) + dy },
+        draggable: diagramModeRef.current === 'edit',
+      }) : n);
+      nodesRef.current = updated;
       return updated;
     });
-  }, [readDiagramState, writeDiagramState, getPersistedNodeEntry]);
+  }, []);
 
   const persistDistrictState = useCallback((nextNodes = nodesRef.current, nextEdges = edgesRef.current) => {
     try {
@@ -1925,10 +1947,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         if (n.id !== id) return n;
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: nextLocked };
-        return { ...n, data: { ...(n.data || {}), nodeData: newNodeData } };
+        return {
+          ...n,
+          draggable: !nextLocked && diagramModeRef.current === 'edit',
+          data: { ...(n.data || {}), lockedPosition: nextLocked, nodeData: newNodeData },
+        };
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
+      try { persistDistrictState(updated, edgesRef.current); } catch (e) {}
     } catch (e) { console.warn('[DISTRICT] toggleLockSelectedNode failed', e && e.message); }
   }, [selectedNodeId]);
 
@@ -2891,7 +2918,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       setNodes([...newNodes]);
       persistDistrictState(newNodes, edgesRef.current);
 
-      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
+      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
       try { setOverlayVisible(true); } catch (e) {}
     } catch (e) {}
   }, [persistDistrictState, onDirtyChanged]);

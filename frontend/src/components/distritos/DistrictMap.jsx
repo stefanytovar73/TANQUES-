@@ -284,35 +284,23 @@ export default function DistrictMap() {
   const handleNodeSelect = useCallback((id, node, options = {}) => {
     const resolvedId = id || node?.id || flowRef.current?.getSelectedNodeId?.() || null;
     const shouldOpenDetails = options && options.openDetails === true;
-    // user actively selected a node -> clear any prior manual dismissal
-    setDetailsDismissedId(null);
+
     setSelectedId(resolvedId);
-    // Solo borrar la conexión seleccionada cuando realmente se selecciona un nodo.
-    // React Flow puede emitir una selección de nodos vacía justo después de hacer
-    // clic en una arista; antes eso borraba selectedEdgeId y el selector Línea
-    // terminaba cambiando el valor por defecto en vez de la conexión seleccionada.
     if (resolvedId) setSelectedEdgeId(null);
 
-    // Always keep the live flow node reference in sync for shape detection
-    const liveNode = node || flowRef.current?.getNodeById?.(resolvedId) || flowRef.current?.getSelectedNode?.() || pickNodeById(resolvedId) || null;
+    const liveNode = resolvedId
+      ? (node || flowRef.current?.getNodeById?.(resolvedId) || flowRef.current?.getSelectedNode?.() || pickNodeById(resolvedId) || null)
+      : null;
     setSelectedFlowNode(resolvedId ? liveNode : null);
 
-    if (!resolvedId) {
-      setSelectedNode(null);
-      return;
-    }
+    // El panel lateral se abre únicamente con doble clic (openDetails=true).
+    // Una selección simple, selección vacía o clic en el fondo no lo cierra;
+    // el usuario lo cierra exclusivamente con la X.
+    if (!shouldOpenDetails) return;
+    if (!resolvedId || !liveNode) return;
 
-    if (!shouldOpenDetails) {
-      setSelectedNode(null);
-      return;
-    }
-
-    if (!liveNode) {
-      setSelectedNode(null);
-      return;
-    }
-
-    setSelectedNode((prev) => (prev && prev.id === resolvedId && prev !== liveNode ? prev : liveNode));
+    setDetailsDismissedId(null);
+    setSelectedNode(liveNode);
   }, [pickNodeById]);
 
   // when selection changes, reset the showConnections toggle
@@ -1067,30 +1055,32 @@ export default function DistrictMap() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
 
-      <ElementDetails open={!!selectedNode} onClose={() => { setDetailsDismissedId(selectedNode?.id || selectedId || null); setSelectedNode(null); setSelectedId(null); setShowConnections(false); }} node={selectedNode || null} tankData={selectedTankData} nodes={nodes} connections={resolvedConnections} onShowConnections={() => {
+      <ElementDetails open={!!selectedNode} onClose={() => { setDetailsDismissedId(selectedNode?.id || null); setSelectedNode(null); setShowConnections(false); }} node={selectedNode || null} tankData={selectedTankData} nodes={nodes} connections={resolvedConnections} onShowConnections={() => {
         if (!selectedNode) return;
         setShowConnections(s => !s);
         centerOn(selectedNode);
       }} onRenameNode={(nextLabel) => {
-        if (!selectedId) return;
+        const detailsId = selectedNode?.id || null;
+        if (!detailsId) return;
         if (flowRef.current && typeof flowRef.current.renameSelectedNode === 'function') {
-          flowRef.current.renameSelectedNode(selectedId, nextLabel);
+          flowRef.current.renameSelectedNode(detailsId, nextLabel);
           window.setTimeout(() => {
             try {
-              const live = flowRef.current?.getNodeById?.(selectedId) || null;
+              const live = flowRef.current?.getNodeById?.(detailsId) || null;
               if (live) {
                 setSelectedNode(live);
-                setSelectedFlowNode(live);
+                if (selectedId === detailsId) setSelectedFlowNode(live);
               }
             } catch (e) {}
           }, 0);
         }
       }} onDelete={() => {
-        if (!selectedId) return;
+        const detailsId = selectedNode?.id || null;
+        if (!detailsId) return;
         if (flowRef.current && typeof flowRef.current.deleteSelectedNode === 'function') {
-          flowRef.current.deleteSelectedNode(selectedId);
+          flowRef.current.deleteSelectedNode(detailsId);
           setSelectedNode(null);
-          setSelectedId(null);
+          if (selectedId === detailsId) setSelectedId(null);
           setShowConnections(false);
         }
       }} />

@@ -60,9 +60,6 @@ const TANQUES_CONFIG = [
     ancho: null,
     compartimientos: null,
   },
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
   {
     aliases: ["tanque interlaken", "interlaken"],
     display_name: "Interlaken",
@@ -135,31 +132,27 @@ const TANQUES_CONFIG = [
     ancho: null,
     compartimientos: null,
   },
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
+  // Referencia dashboard oficial IBAL 16-09-2026: 4.02 m = 67%.
   {
     aliases: ["calucaima", "calucaima", "caluc aima", "tanque calucaima", "tanque caluc aima"],
     display_name: "Calucaima",
     area: null,
-    altura_total: null,
-    altura_rebose: null,
-    altura_rebose_calibrada: 5.0243902439,
+    altura_total: 6,
+    altura_rebose: 6,
+    altura_rebose_calibrada: 6,
     volumen: null,
     largo: null,
     ancho: null,
     compartimientos: null,
   },
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
+  // Referencia dashboard oficial IBAL 16-09-2026: 4.75 m = 79%.
   {
     aliases: ["miramar", "tanque miramar"],
     display_name: "Miramar",
     area: null,
-    altura_total: null,
-    altura_rebose: null,
-    altura_rebose_calibrada: 7.46875,
+    altura_total: 6,
+    altura_rebose: 6,
+    altura_rebose_calibrada: 6,
     volumen: null,
     largo: null,
     ancho: null,
@@ -187,9 +180,6 @@ const TANQUES_CONFIG = [
     ancho: null,
     compartimientos: null,
   },
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
   {
     aliases: ["tanque la 30", "la 30", "calle 30", "tanque 30"],
     display_name: "Tanque La 30",
@@ -202,9 +192,6 @@ const TANQUES_CONFIG = [
     ancho: null,
     compartimientos: null,
   },
-  // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
-  // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
-  // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
   {
     aliases: ["tanque la 29", "la 29", "calle 29", "tanque 29"],
     display_name: "Tanque La 29",
@@ -300,13 +287,14 @@ const TANQUES_CONFIG = [
     ancho: null,
     compartimientos: null,
   },
+  // Referencia dashboard oficial IBAL 16-09-2026: 2.72 m = 45%.
   {
     aliases: ["tanque zona industrial", "zona industrial"],
     display_name: "Zona Industrial",
     area: 660.93,
-    altura_total: 16.29,
-    altura_rebose: 16.77777777777778,
-    altura_rebose_calibrada: 16.77777777777778,
+    altura_total: 6,
+    altura_rebose: 6,
+    altura_rebose_calibrada: 6,
     volumen: 10627.49,
     largo: null,
     ancho: null,
@@ -319,7 +307,7 @@ const TANQUES_CONFIG = [
     altura_total: 7.11,
     altura_rebose: 6.56,
     largo: null,
-    ancho: null,    
+    ancho: null,
     compartimientos: null,
   },
 ];

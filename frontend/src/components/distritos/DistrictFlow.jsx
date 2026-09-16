@@ -1329,7 +1329,7 @@ function SmartDistrictEdge(props) {
     ...(selected ? { filter: 'drop-shadow(0 0 2px rgba(37,99,235,0.55))' } : {}),
   };
 
-  return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={visibleStyle} />;
+  return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={visibleStyle} interactionWidth={24} />;
 }
 
 const EDGE_TYPES = { smart: SmartDistrictEdge };
@@ -5344,6 +5344,8 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     getSelectedNode: () => (nodesRef.current || []).find((n) => n.id === (selectedNodeIdRef.current || selectedNodeId)) || null,
     getNodeById: (id) => (nodesRef.current || []).find((n) => n.id === id) || null,
     getSelectedEdgeId: () => selectedEdgeId,
+    getSelectedEdge: () => (edgesRef.current || []).find((edge) => edge.id === selectedEdgeId) || null,
+    getEdgeById: (id) => (edgesRef.current || []).find((edge) => edge.id === id) || null,
     getShowFlow: () => showFlow,
     renameSelectedNode: (id, label) => {
       const targetId = id || selectedNodeId;
@@ -5565,10 +5567,11 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
             if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: true });
           } catch (e) {}
         }}
-        onEdgeClick={(_, edge) => {
-          setSelectedNodeId(null);
+        onEdgeClick={(event, edge) => {
+          try { event?.stopPropagation?.(); } catch (e) {}
+          _setSelectedNodeId(null);
           setSelectedEdgeId(edge.id);
-          if (onEdgeSelect) onEdgeSelect(edge.id);
+          if (onEdgeSelect) onEdgeSelect(edge.id, edge);
         }}
         onPaneClick={(event) => {
           const target = event?.target;
@@ -5579,6 +5582,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
           _setSelectedNodeId(null);
           setSelectedEdgeId(null);
+          if (onEdgeSelect) onEdgeSelect(null, null);
           if (onNodeSelect) onNodeSelect(null, null);
           if (editMode && mode === 'connect') setConnectPendingId(null);
           if (editMode && deleteMode) {

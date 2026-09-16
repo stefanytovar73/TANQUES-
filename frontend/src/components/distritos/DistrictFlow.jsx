@@ -3876,15 +3876,16 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         updated.push({ id, type: r.type || 'tank', position, customName: r.customName || '', nameLocked: !!r.nameLocked, label: r.label || id, data: { ...r, customName: r.customName || '', label: r.label || id, nodeData } });
       }
 
-      const normalizedEdges = (remoteEdges || [])
+      const normalizedEdges = rebalanceSmartConnectionPorts(updated, (remoteEdges || [])
         .filter((edge) => !removedIds.has(String(edge && edge.source)) && !removedIds.has(String(edge && edge.target)))
         .filter(isValidSavedEdge)
         .map((edge) => normalizeSavedEdge(edge, {
           animated: !!showFlow,
-          type: 'step',
+          type: 'smart',
           markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
-        })).filter((edge) => edge && edge.source && edge.target);
+          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round', strokeLinejoin: 'round' },
+        }))
+        .filter((edge) => edge && edge.source && edge.target));
 
       // Update in-memory and UI state.
       // Remote state is applied only as a view update; it must not trigger a save loop.
@@ -4911,9 +4912,9 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         .filter(isValidSavedEdge)
         .map((edge) => normalizeSavedEdge(edge, {
           animated: !!showFlow,
-          type: 'step',
+          type: 'smart',
           markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round', strokeLinejoin: 'round' },
         }))
         .filter((edge) => edge && edge.source && edge.target);
 
@@ -4965,14 +4966,15 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           return !removedIds.has(String(entry.id));
         });
 
+        const routedInitialEdges = rebalanceSmartConnectionPorts(savedNodes, initialEdges);
         nodesRef.current = savedNodes;
-        edgesRef.current = initialEdges;
+        edgesRef.current = routedInitialEdges;
         setNodes(savedNodes);
-        setEdges(initialEdges);
+        setEdges(routedInitialEdges);
         try {
           const initialDesign = buildDesignHistorySnapshot({
             nodes: Object.fromEntries((savedNodes || []).map((n) => [n.id, getPersistedNodeEntry(n, (saved && saved.nodes && saved.nodes[n.id]) || {})])),
-            edges: initialEdges,
+            edges: routedInitialEdges,
           });
           savedPastRef.current = [initialDesign];
           savedFutureRef.current = [];
@@ -5339,7 +5341,16 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     updateEdgeType: (edgeId, type) => {
       if (!edgeId || !type) return;
       try {
-        const updated = (edgesRef.current || []).map(e => e.id === edgeId ? ({ ...e, type }) : e);
+        let updated = (edgesRef.current || []).map((edge) => {
+          if (edge.id !== edgeId) return edge;
+          const smart = type === 'smart';
+          return {
+            ...edge,
+            type,
+            data: { ...(edge.data || {}), routeMode: smart ? 'smart' : 'manual', autoPorts: true },
+          };
+        });
+        if (type === 'smart') updated = rebalanceSmartConnectionPorts(nodesRef.current || [], updated);
         setEdges(updated);
         edgesRef.current = updated;
         try { persistDistrictState(nodesRef.current, updated); } catch (e2) {}
@@ -5535,11 +5546,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           setSelectedEdgeId(edge.id);
           if (onEdgeSelect) onEdgeSelect(edge.id);
         }}
-        onNodeMouseDown={(_, node) => {
-          if (editMode && mode === 'connect') {
-            return;
-          }
-        }}
         onPaneClick={(event) => {
           const target = event?.target;
           const clickedInsideNode = !!(target && typeof target.closest === 'function' && (
@@ -5557,7 +5563,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         }}
         onEdgesDelete={onEdgesDelete}
         nodeTypes={NODE_TYPES}
-        updateNodeDimensions={false}
+        edgeTypes={EDGE_TYPES}
         attributionPosition="bottom-left"
         onInit={(inst) => { setRfInstance(inst); }}
         onMoveEnd={(_, viewport) => {
@@ -5574,8 +5580,8 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         snapToGrid={false}
         nodesDraggable={diagramMode === 'edit'}
         elementsSelectable={true}
-        nodesConnectable={editMode && (diagramMode === 'edit' || editMode)}
-        connectOnClick={editMode && (diagramMode === 'edit' || editMode)}
+        nodesConnectable={false}
+        connectOnClick={false}
         connectionMode="loose"
       >
         <Background gap={16} />

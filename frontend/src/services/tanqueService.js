@@ -195,6 +195,22 @@ const tanqueService = {
     STORAGE_KEYS.ptapLast,
   ),
 
+  // Dispara las tres fuentes que usa Distritos al mismo tiempo. Esto evita
+  // esperar a que ReactFlow monte cada tarjeta para recién consultar PTAP/captación.
+  preloadDistrictData: async (forceRefresh = false) => {
+    const [tanquesResult, captacionResult, ptapResult] = await Promise.allSettled([
+      tanqueService.getTanques(forceRefresh),
+      tanqueService.getCaptacion(forceRefresh),
+      tanqueService.getPtap(forceRefresh),
+    ]);
+
+    return {
+      tanques: tanquesResult.status === 'fulfilled' ? tanquesResult.value : null,
+      captacion: captacionResult.status === 'fulfilled' ? captacionResult.value : null,
+      ptap: ptapResult.status === 'fulfilled' ? ptapResult.value : null,
+    };
+  },
+
   getTanqueById: async (id) => {
     const response = await api.get(`/tanques/${id}`);
     return response.data;

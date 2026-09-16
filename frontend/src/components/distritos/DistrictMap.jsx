@@ -674,10 +674,14 @@ export default function DistrictMap() {
                 if (selectedId) {
                   flowRef.current?.deleteSelectedNode?.(selectedId);
                   setSelectedId(null);
+                  setDeleteMode(false);
+                  setEditTool('select');
                   setSnack({ open: true, msg: 'Elemento eliminado' });
                 } else if (selectedEdgeId) {
                   flowRef.current?.deleteSelectedConnection?.(selectedEdgeId);
                   setSelectedEdgeId(null);
+                  setDeleteMode(false);
+                  setEditTool('select');
                   setSnack({ open: true, msg: 'Conexión eliminada' });
                 } else {
                   setDeleteMode(m => !m);
@@ -695,6 +699,8 @@ export default function DistrictMap() {
                 if (selectedEdgeId) {
                   flowRef.current?.deleteSelectedConnection?.(selectedEdgeId);
                   setSelectedEdgeId(null);
+                  setDeleteMode(false);
+                  setEditTool('select');
                   setSnack({ open: true, msg: 'Conexión eliminada' });
                 } else {
                   flowRef.current?.deleteSelectedConnection?.();
@@ -935,7 +941,11 @@ export default function DistrictMap() {
               Cargando tanques, Mackenfloc y caudales…
             </Box>
           ) : (
-            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onEdgeSelect={(id, edge) => {
+            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onDeleteComplete={() => {
+              setDeleteMode(false);
+              setEditTool('select');
+              setSelectedEdgeId(null);
+            }} onEdgeSelect={(id, edge) => {
               setSelectedEdgeId(id || null);
               if (!id) return;
               const selectedEdge = edge || flowRef.current?.getEdgeById?.(id) || null;

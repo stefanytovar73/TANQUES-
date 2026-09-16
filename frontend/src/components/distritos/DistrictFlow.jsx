@@ -1408,6 +1408,7 @@ function FlowTankNode(props) {
   // Diagnostic: mark when node wrapper's onSelect is invoked
   try { if (typeof window !== 'undefined') { /* noop to keep tool happy */ } } catch (e) {}
   const beginEdit = (ev) => {
+    if (mode === 'connect' || deleteMode) return;
     ev.preventDefault();
     ev.stopPropagation();
     setDraft(labelText);
@@ -1458,7 +1459,7 @@ function FlowTankNode(props) {
   const bottomRightHandle = rotatePoint(innerOffsetX + 92 * tankScale, innerOffsetY + 114 * tankScale, rotation);
 
   return (
-    <div onClick={handleClick} style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
       {/* Handles — solo visibles en editMode */}
       <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
@@ -1583,6 +1584,7 @@ function FlowPlantNode(props) {
   const metricNodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
   const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {}));
   const beginEdit = (ev) => {
+    if (mode === 'connect' || deleteMode) return;
     ev.preventDefault();
     ev.stopPropagation();
     setDraft(labelText);
@@ -1648,7 +1650,7 @@ function FlowPlantNode(props) {
   const bottomHandle = rotatePoint(cx, h - 14, rotation);
 
   return (
-    <div onClick={handleClick} style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
@@ -1785,6 +1787,7 @@ function FlowDistrictNode(props) {
   const labelText = getNodeDisplayName({ data: nodeData });
 
   const beginEdit = (ev) => {
+    if (mode === 'connect' || deleteMode) return;
     ev.preventDefault();
     ev.stopPropagation();
     setDraft(labelText);
@@ -1827,7 +1830,7 @@ function FlowDistrictNode(props) {
   const bottomHandle = rotatePoint(cx, h - 4, rotation);
 
   return (
-    <div onClick={handleClick} style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
@@ -1960,7 +1963,7 @@ function FlowShapeNode(props) {
     if (onSelect) onSelect(nodeData.id);
   };
 
-  const beginEdit = (ev) => { ev.preventDefault(); ev.stopPropagation(); setDraft(getNodeDisplayName({ data: nodeData })); setIsEditing(true); try { if (typeof window !== 'undefined') window.__LAST_BEGIN_EDIT = nodeData?.id || data?.id || null; } catch (e) {} };
+  const beginEdit = (ev) => { if (mode === 'connect' || deleteMode) return; ev.preventDefault(); ev.stopPropagation(); setDraft(getNodeDisplayName({ data: nodeData })); setIsEditing(true); try { if (typeof window !== 'undefined') window.__LAST_BEGIN_EDIT = nodeData?.id || data?.id || null; } catch (e) {} };
   const saveLabel = () => {
     const clean = (draft || '').trim() || 'Texto';
     if (onRename) onRename(nodeData.id, clean);
@@ -2024,7 +2027,7 @@ function FlowShapeNode(props) {
   };
 
   return (
-    <div onClick={handleClick} style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
+    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={handleStyle} />
       <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
       <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
@@ -2096,7 +2099,7 @@ function formatDateLabel(isoDate, fmt = 'dd/MM/yyyy') {
   } catch (e) { return isoDate || ''; }
 }
 
-const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, initialEdges, onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
+const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, initialEdges, onNodeSelect, onEdgeSelect, onDeleteComplete, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
 
   // Note: avoid updateNodeDimensions to prevent React Flow from hiding nodes while measuring
   try { console.debug('[DISTRICT DEBUG] DistrictFlow init props initialNodes.length:', (initialNodes || []).length, 'initialEdges.length:', (initialEdges || []).length); } catch (e) {}
@@ -3128,6 +3131,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
   const savedPastRef = useRef([]);
   const savedFutureRef = useRef([]);
   const undoBusyRef = useRef(false);
+  const programmaticEdgeDeleteIdsRef = useRef(new Set());
   const clearTransientHistory = useCallback(() => {
     pastRef.current = [];
     futureRef.current = [];
@@ -3762,11 +3766,20 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       // Persist deletion: append to deletedNodeIds and remove from hiddenNodeIds without rehydrating/restoring nodes
       const opId = `delete-node:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
       try { console.debug('[DIAG] deleteSelectedNode start', opId, 'targetId=', targetId, 'nodesBefore=', (nodesRef.current||[]).length); } catch (e) {}
-      persistDistrictState(nextNodes, nextEdges, { deletedNodeIds: [targetId], appendDeletedIds: true, removeHiddenNodeIds: [targetId], _diagOpId: opId });
-      try { console.debug('[DIAG] deleteSelectedNode persisted, opId=', opId); } catch (e) {}
+      setTimeout(() => {
+        try {
+          persistDistrictState(nodesRef.current || [], edgesRef.current || [], {
+            deletedNodeIds: [targetId],
+            appendDeletedIds: true,
+            removeHiddenNodeIds: [targetId],
+            _diagOpId: opId,
+          });
+        } catch (e) {}
+      }, 0);
+      try { if (typeof onDeleteComplete === 'function') onDeleteComplete('node', targetId); } catch (e) {}
     } catch (err) { console.warn('[DistrictFlow] persist on delete failed', err && err.message); }
     return true;
-  }, [persistDistrictState, readDiagramState, selectedNodeId, writeDiagramState, onNodeSelect]);
+  }, [persistDistrictState, selectedNodeId, onNodeSelect, onDeleteComplete]);
 
   // Apply remote persisted state incrementally without reloading the page
   const applyRemoteState = useCallback((remote) => {
@@ -4392,26 +4405,40 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     setEdges(next);
     edgesRef.current = next;
     setSelectedEdgeId(null);
+    programmaticEdgeDeleteIdsRef.current.add(targetId);
+
+    // Dejar que React pinte primero la eliminación. El guardado se hace enseguida
+    // en segundo plano usando el estado más reciente, sin bloquear el trabajo.
     const opId = `delete-edge:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-    try { console.debug('[DIAG] deleteSelectedConnection start', opId, 'edgeId=', targetId); } catch (e) {}
-    persistConnection(next, { _diagOpId: opId });
+    setTimeout(() => {
+      try { persistConnection(edgesRef.current || [], { _diagOpId: opId }); } catch (e) {}
+      try { programmaticEdgeDeleteIdsRef.current.delete(targetId); } catch (e) {}
+    }, 0);
+
+    try { if (typeof onDeleteComplete === 'function') onDeleteComplete('edge', targetId); } catch (e) {}
     return true;
-  }, [persistConnection, selectedEdgeId]);
+  }, [persistConnection, selectedEdgeId, onDeleteComplete]);
 
   const onEdgesDelete = useCallback((deleted) => {
     if (!deleted || !deleted.length) return;
     try {
+      const ids = new Set(deleted.map((d) => d.id));
+      const alreadyHandled = Array.from(ids).every((id) => programmaticEdgeDeleteIdsRef.current.has(id));
+      if (alreadyHandled) return;
+
       clearTransientHistory();
-      const ids = new Set(deleted.map(d => d.id));
-      const next = (edgesRef.current || []).filter(e => !ids.has(e.id));
+      const next = (edgesRef.current || []).filter((edge) => !ids.has(edge.id));
       setEdges(next);
       edgesRef.current = next;
-      const opId = `onEdgesDelete:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-      try { console.debug('[DIAG] onEdgesDelete', opId, 'deletedIds=', Array.from(ids)); } catch (e) {}
-      persistConnection(next, { _diagOpId: opId });
       setSelectedEdgeId(null);
+
+      const opId = `onEdgesDelete:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+      setTimeout(() => {
+        try { persistConnection(edgesRef.current || [], { _diagOpId: opId }); } catch (e) {}
+      }, 0);
+      try { if (typeof onDeleteComplete === 'function') onDeleteComplete('edge', Array.from(ids)[0] || null); } catch (e) {}
     } catch (e) {}
-  }, [persistConnection]);
+  }, [persistConnection, onDeleteComplete]);
 
   const doUndo = useCallback(async () => {
     if (undoBusyRef.current || savedPastRef.current.length < 2) return false;

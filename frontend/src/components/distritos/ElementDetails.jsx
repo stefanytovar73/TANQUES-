@@ -22,12 +22,7 @@ export default function ElementDetails({ open, onClose, node, onShowConnections,
       return;
     }
 
-    setDraftName((prev) => {
-      if (prev && prev.trim() && prev !== effectiveName && prev !== '') {
-        return prev;
-      }
-      return effectiveName || '';
-    });
+    setDraftName(effectiveName || '');
     try { console.info('[SELECTION TRACE] ELEMENT_DETAILS_NODE_ID=' + (node && node.id)); } catch (e) {}
     try { console.info('[SELECTION TRACE] NAME_FIELD_RENDERED=' + true); } catch (e) {}
     try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('ELEMENT_DETAILS_NODE_ID:' + (node && node.id)); window.__SELECTION_TRACE.push('NAME_FIELD_RENDERED:true'); } } catch (e) {}

@@ -3064,8 +3064,17 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         updatedAt: new Date().toISOString(),
       };
 
-      // Persist exact figure locally first, then server, then reload only on success.
+      // Persist exact figure locally first. If an older autosave is still
+      // in flight, let it finish before sending this newer snapshot so it can
+      // never overwrite the selected figure afterwards.
       writeDiagramState(payload, { source: 'local', sendToServer: false });
+      let waits = 0;
+      while (savingRef.current && waits < 80) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        waits += 1;
+      }
+      pendingServerSaveRef.current = null;
+
       const ok = await diagramService.saveState(payload);
       if (!ok) return false;
       writeDiagramState(payload, { source: 'remote', sendToServer: false });

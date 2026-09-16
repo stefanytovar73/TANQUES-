@@ -1659,7 +1659,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       width: safeWidth,
       height: safeHeight,
       rotation: safeRotation,
-      lockedPosition: prev.lockedPosition || false,
+      lockedPosition: source.lockedPosition ?? n?.data?.lockedPosition ?? prev.lockedPosition ?? false,
       // persist key metric/display fields so duplicated or user-added nodes keep their values
       valor_m: source.valor_m ?? source.nivel ?? prev.valor_m ?? prev.nivel ?? null,
       nivel: source.nivel ?? source.valor_m ?? prev.nivel ?? prev.valor_m ?? null,

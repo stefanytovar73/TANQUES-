@@ -257,24 +257,19 @@ function enrichTankNodeMetrics(data = {}) {
   const resolvedHeight = source.altura_rebose ?? source.altura_rebose_m ?? source.alturaRebose ?? null;
   const heightNumber = resolvedHeight != null && Number.isFinite(Number(resolvedHeight)) ? Number(resolvedHeight) : null;
 
-  // La API IBAL devuelve porcentaje_capacidad (no porcentaje).
-  // También acepta porcentaje_api o porcentaje directo como fallback.
-  const ibalPct = Number.isFinite(Number(source.porcentaje_capacidad)) ? Number(source.porcentaje_capacidad)
-    : (Number.isFinite(Number(source.porcentaje_api)) ? Number(source.porcentaje_api)
-      : (Number.isFinite(Number(source.porcentaje)) ? Number(source.porcentaje) : null));
+  // porcentaje_capacidad es autoritativo cuando el campo viene en el payload,
+  // incluso si IBAL lo envía como null. Solo calculamos un fallback para datos
+  // locales/antiguos que no traen ningún campo de porcentaje.
+  const hasApiPct = Object.prototype.hasOwnProperty.call(source, 'porcentaje_capacidad');
+  const apiPct = hasApiPct
+    ? (Number.isFinite(Number(source.porcentaje_capacidad)) ? Number(source.porcentaje_capacidad) : null)
+    : (Object.prototype.hasOwnProperty.call(source, 'porcentaje_api')
+      ? (Number.isFinite(Number(source.porcentaje_api)) ? Number(source.porcentaje_api) : null)
+      : null);
 
-  // calidad=DUDOSA o sin_datos=true → no mostrar porcentaje (Sin datos)
-  const isBadQuality = source.calidad === 'DUDOSA' || source.sin_datos === true;
-  let percentage = null;
-  if (!isBadQuality) {
-    if (nivelNumber != null && heightNumber != null && heightNumber > 0) {
-      // La altura_rebose ya viene calibrada desde mergeTankWithCatalog (catálogo > API)
-      percentage = calculateDisplayPorcentaje({ ...source, valor_m: nivelNumber, altura_rebose: heightNumber });
-    }
-    // Si el cálculo por nivel/altura falló, usar el porcentaje que provee IBAL directamente
-    if (percentage == null && ibalPct != null) {
-      percentage = ibalPct;
-    }
+  let percentage = apiPct;
+  if (!hasApiPct && !Object.prototype.hasOwnProperty.call(source, 'porcentaje_api')) {
+    percentage = calculateDisplayPorcentaje({ ...source, valor_m: nivelNumber, altura_rebose: heightNumber });
   }
 
   return {
@@ -410,10 +405,12 @@ function FlowTankNode(props) {
   };
 
   const handleStyle = {
-    width: 10, height: 10, background: '#2563eb',
-    border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-    borderRadius: '50%', zIndex: 10,
-    opacity: editMode ? 1 : 0, pointerEvents: editMode ? 'auto' : 'none',
+    width: 8, height: 8, background: 'transparent',
+    border: 'none', boxShadow: 'none',
+    borderRadius: '50%', zIndex: 1,
+    // Los anclajes siguen existiendo para ReactFlow, pero no se dibujan como
+    // puntos alrededor del tanque. Las conexiones se crean haciendo clic en el nodo.
+    opacity: 0, pointerEvents: 'none',
   };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
@@ -444,15 +441,15 @@ function FlowTankNode(props) {
 
   return (
     <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
-      {/* Handles — solo visibles en editMode */}
+      {/* Anclajes invisibles. Conservamos ids antiguos para no romper diagramas guardados. */}
       <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top}    id="t-top"    style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
-
-      {/* Cuatro puntos extra, alternados en las esquinas del tanque. */}
-      <Handle type="target" position={Position.Left} id="t-top-left" style={{ ...handleStyle, left: topLeftHandle.left, top: topLeftHandle.top }} />
-      <Handle type="source" position={Position.Right} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
+      <Handle type="source" position={Position.Top} id="s-top-left" style={{ ...handleStyle, left: topLeftHandle.left, top: topLeftHandle.top }} />
+      <Handle type="source" position={Position.Top} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
+      <Handle type="target" position={Position.Top} id="t-top-left" style={{ ...handleStyle, left: topLeftHandle.left, top: topLeftHandle.top }} />
+      <Handle type="target" position={Position.Top} id="t-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
       <Handle type="source" position={Position.Left} id="s-bottom-left" style={{ ...handleStyle, left: bottomLeftHandle.left, top: bottomLeftHandle.top }} />
       <Handle type="target" position={Position.Right} id="t-bottom-right" style={{ ...handleStyle, left: bottomRightHandle.left, top: bottomRightHandle.top }} />
 
@@ -1153,6 +1150,54 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       return isSource ? (sourceMap[best] || 's-right') : (targetMap[best] || 't-left');
     } catch (e) { return undefined; }
   }, []);
+
+  const normalizeTankEdgeHandles = useCallback((edgeList, nodeList = nodesRef.current) => {
+    const nodesById = new Map((nodeList || []).map((node) => [node.id, node]));
+    const result = (edgeList || []).map((edge) => ({ ...edge }));
+
+    const sourceGroups = new Map();
+    const targetGroups = new Map();
+
+    for (const edge of result) {
+      const sourceNode = nodesById.get(edge.source);
+      const targetNode = nodesById.get(edge.target);
+      if (sourceNode?.type === 'tank') {
+        if (!sourceGroups.has(edge.source)) sourceGroups.set(edge.source, []);
+        sourceGroups.get(edge.source).push(edge);
+      }
+      if (targetNode?.type === 'tank') {
+        if (!targetGroups.has(edge.target)) targetGroups.set(edge.target, []);
+        targetGroups.get(edge.target).push(edge);
+      }
+    }
+
+    const sortByOtherX = (edgesForNode, nodeId, outbound) => {
+      return [...edgesForNode].sort((a, b) => {
+        const otherA = nodesById.get(outbound ? a.target : a.source);
+        const otherB = nodesById.get(outbound ? b.target : b.source);
+        const ax = Number(otherA?.position?.x ?? 0);
+        const bx = Number(otherB?.position?.x ?? 0);
+        return ax - bx;
+      });
+    };
+
+    for (const [nodeId, group] of sourceGroups.entries()) {
+      const ordered = sortByOtherX(group, nodeId, true);
+      ordered.forEach((edge, index) => {
+        edge.sourceHandle = index % 2 === 0 ? 's-top-left' : 's-top-right';
+      });
+    }
+
+    for (const [nodeId, group] of targetGroups.entries()) {
+      const ordered = sortByOtherX(group, nodeId, false);
+      ordered.forEach((edge, index) => {
+        edge.targetHandle = index % 2 === 0 ? 't-top-left' : 't-top-right';
+      });
+    }
+
+    return result;
+  }, []);
+
   const openEditorRef = useRef(new Set());
   const [showFlow, setShowFlow] = useState(false);
   const [connectDate, setConnectDate] = useState('');
@@ -1812,7 +1857,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       const updated = currentNodes.map((n) => {
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: false };
-        return { ...n, data: { ...(n.data || {}), nodeData: newNodeData } };
+        return { ...n, draggable: true, data: { ...(n.data || {}), lockedPosition: false, nodeData: newNodeData } };
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
@@ -1835,7 +1880,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       const updated = currentNodes.map((n) => {
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: true };
-        return { ...n, data: { ...(n.data || {}), nodeData: newNodeData } };
+        return { ...n, draggable: false, data: { ...(n.data || {}), lockedPosition: true, nodeData: newNodeData } };
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
@@ -1911,15 +1956,25 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
   const updateSelectedConnectionStyle = useCallback((edgeId = selectedEdgeId, nextStyle = {}) => {
     if (!edgeId) return;
-    const updated = (edgesRef.current || []).map((e) => e.id === edgeId ? ({ ...e, style: { ...(e.style || {}), ...(nextStyle || {}) } }) : e);
+    const updated = (edgesRef.current || []).map((e) => {
+      if (e.id !== edgeId) return e;
+      const next = { ...e, style: { ...(e.style || {}), ...(nextStyle || {}) } };
+      if (nextStyle && nextStyle.stroke) {
+        next.markerEnd = { ...(e.markerEnd || {}), type: (e.markerEnd && e.markerEnd.type) || MarkerType.ArrowClosed, color: nextStyle.stroke };
+      }
+      return next;
+    });
     setEdges(updated);
     edgesRef.current = updated;
-    try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
     try {
       const raw = readDiagramState();
+      raw.edges = updated;
+      const prevMap = raw.nodes && typeof raw.nodes === 'object' ? raw.nodes : {};
+      raw.nodes = Object.fromEntries((nodesRef.current || []).map((n) => [n.id, getPersistedNodeEntry(n, prevMap[n.id] || {})]));
       writeDiagramState(raw);
+      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
     } catch (err) {}
-  }, [selectedEdgeId, readDiagramState, writeDiagramState]);
+  }, [selectedEdgeId, readDiagramState, writeDiagramState, getPersistedNodeEntry, onDirtyChanged]);
 
   const updateSelectedEdgeLabel = useCallback((edgeId = selectedEdgeId, newLabel = '') => {
     if (!edgeId) return;
@@ -1958,7 +2013,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       nextEdge.label = formatDateLabel(connectDate, connectDateFormat || 'dd/MM/yyyy');
     }
 
-    const created = addEdge(nextEdge, nextEdges);
+    const created = normalizeTankEdgeHandles(addEdge(nextEdge, nextEdges), nodesRef.current);
     setEdges(created);
     edgesRef.current = created;
     persistConnection(created);
@@ -2074,9 +2129,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         return {
           ...n,
           position,
+          draggable: !r.lockedPosition,
           customName: r.customName || n.customName || nodeData.customName || '',
           label: r.label || n.label || nodeData.label || n.id,
-          data: { ...(n.data || {}), ...r, nodeData },
+          data: { ...(n.data || {}), ...r, lockedPosition: !!r.lockedPosition, nodeData },
         };
       });
 
@@ -2699,10 +2755,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               id: freshNode.id,
               type: freshNode.type || 'tank',
               position: sanitizePosition(rawPosition),
+              draggable: !persistedVisual.lockedPosition,
               customName,
               nameLocked,
               label,
-              data: { ...rawNode, customName, nameLocked, label, nodeData: finalNodeData },
+              data: { ...rawNode, customName, nameLocked, label, lockedPosition: !!persistedVisual.lockedPosition, nodeData: finalNodeData },
             };
           });
 
@@ -2726,10 +2783,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               id: savedId,
               type: persistedVisual.type || 'tank',
               position: sanitizePosition(rawPosition),
+              draggable: !persistedVisual.lockedPosition,
               customName,
               nameLocked,
               label,
-              data: { ...persistedVisual, customName, nameLocked, label, nodeData: finalNodeData },
+              data: { ...persistedVisual, customName, nameLocked, label, lockedPosition: !!persistedVisual.lockedPosition, nodeData: finalNodeData },
             };
             mergedNodes.push(userNode);
             mergedNodesMap.set(savedId, userNode);
@@ -2738,7 +2796,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           }
         }
 
-        const savedEdges = (Array.isArray(saved.edges) ? saved.edges : [])
+        const savedEdgesRaw = (Array.isArray(saved.edges) ? saved.edges : [])
           .filter(isValidSavedEdge)
           .map((edge) => normalizeSavedEdge(edge, {
             animated: !!showFlow,
@@ -2747,6 +2805,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
             style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
           }))
           .filter((edge) => edge.source && edge.target && !deletedIds.includes(edge.source) && !deletedIds.includes(edge.target));
+        const savedEdges = normalizeTankEdgeHandles(savedEdgesRaw, mergedNodes);
 
         nodesRef.current = mergedNodes;
         edgesRef.current = savedEdges;

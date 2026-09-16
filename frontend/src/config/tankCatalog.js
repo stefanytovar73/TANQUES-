@@ -284,15 +284,33 @@ const calculateDisplayPorcentaje = (tank, explicitHeight = null) => {
         return raw == null ? null : Math.round(raw);
     }
 
-    const apiPercentage = [
-        tank.porcentaje_capacidad,
-        tank.porcentaje_capacidad_api,
-        tank.porcentaje_api,
-        tank.porcentaje,
-        tank.pct,
-    ].find((value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)));
-    if (apiPercentage !== undefined) {
-        return Number(apiPercentage);
+    // porcentaje_capacidad es autoritativo cuando IBAL incluye el campo,
+    // incluso cuando su valor es null. No inventar un porcentaje local en ese caso.
+    if (Object.prototype.hasOwnProperty.call(tank, "porcentaje_capacidad")) {
+        const value = tank.porcentaje_capacidad;
+        return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+            ? Number(value)
+            : null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(tank, "porcentaje_capacidad_api")) {
+        const value = tank.porcentaje_capacidad_api;
+        return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+            ? Number(value)
+            : null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(tank, "porcentaje_api")) {
+        const value = tank.porcentaje_api;
+        return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+            ? Number(value)
+            : null;
+    }
+
+    const legacyPercentage = [tank.porcentaje, tank.pct]
+        .find((value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)));
+    if (legacyPercentage !== undefined) {
+        return Number(legacyPercentage);
     }
 
     const nivel = (tank.valor_m !== null && tank.valor_m !== undefined && tank.valor_m !== "") && Number.isFinite(Number(tank.valor_m)) ? Number(tank.valor_m)

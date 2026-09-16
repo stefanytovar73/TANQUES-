@@ -721,6 +721,22 @@ async function loadFlowMetricForNodeId(nodeId) {
   }
 }
 
+function getCachedFlowMetricForNodeId(nodeId) {
+  const config = getMetricConfigForNodeId(nodeId);
+  if (!config) return null;
+
+  try {
+    const response = config.service === 'ptap'
+      ? tanqueService.peekPtap?.()
+      : tanqueService.peekCaptacion?.();
+    const variables = (response && response.variables) || [];
+    const variable = variables.find((item) => item && item.tag === config.tag);
+    return variable ? formatFlowMetricVariable(variable, config.defaultUnit) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function normalizeCalibrationKey(value) {
   return String(value || '')
     .normalize('NFD')
@@ -1170,7 +1186,8 @@ function FlowPlantNode(props) {
   };
   const isPending = Boolean(data && data.pendingConnect);
   const labelText = getNodeDisplayName({ data: nodeData });
-  const [metricLabel, setMetricLabel] = useState(null);
+  const metricNodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
+  const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId));
   const beginEdit = (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -1181,24 +1198,26 @@ function FlowPlantNode(props) {
 
   useEffect(() => {
     let mounted = true;
-    const nodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
+
+    const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId);
+    if (cachedLabel != null) setMetricLabel(cachedLabel);
 
     (async () => {
       try {
-        if (!nodeId || !getMetricConfigForNodeId(nodeId)) {
+        if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId)) {
           if (mounted) setMetricLabel(null);
           return;
         }
 
-        const label = await loadFlowMetricForNodeId(nodeId);
-        if (mounted) setMetricLabel(label);
+        const label = await loadFlowMetricForNodeId(metricNodeId);
+        if (mounted && label != null) setMetricLabel(label);
       } catch (error) {
-        if (mounted) setMetricLabel(null);
+        // Conservar el último dato visible si el refresco falla.
       }
     })();
 
     return () => { mounted = false; };
-  }, [nodeData?.id, nodeData?.nodeId, data?.id, data?.nodeId]);
+  }, [metricNodeId]);
 
   const saveLabel = () => {
     const clean = (draft || '').replace(/\s+/g, ' ').trim();

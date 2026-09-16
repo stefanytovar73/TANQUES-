@@ -80,9 +80,9 @@ const getDefaultCatalog = () => {
 const loadCatalog = () => {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return DEFAULT_CATALOG;
+        if (!raw) return getDefaultCatalog();
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return DEFAULT_CATALOG;
+        if (!Array.isArray(parsed)) return getDefaultCatalog();
         return parsed.map((item) => {
             // keep configurable capacity fields (capacidad_actual_m3, volumen_restante_m3)
             const { porcentaje, nivel, valor_m, ...cleanedItem } = item;
@@ -204,61 +204,6 @@ const findCatalogEntry = (tank, catalog = null) => {
         )
     );
     return safeMatch || null;
-};
-
-const ZERO_PERCENT_EXCEPTION_TANKS = new Set([
-    'tanque-calucaima',
-    'tanque-miramar',
-    'tanque-zona-industrial',
-    'nivel-calucaima',
-    'nivel-miramar',
-    'nivel-de-zona-industrial',
-    'calucaima',
-    'miramar',
-    'zona industrial',
-]);
-
-const isZeroPercentExceptionTank = (tank = {}) => {
-    const candidates = [
-        tank.id,
-        tank.tag,
-        tank.apiTag,
-        tank.apiName,
-        tank.originalName,
-        tank.nombre,
-        tank.display_name,
-        tank.label,
-        tank.name,
-    ].filter((value) => value != null && String(value).trim() !== '');
-
-    if (!candidates.length) return false;
-
-    const normalized = candidates
-        .map((value) => String(value).trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase())
-        .join(' ')
-        .replace(/[^a-z0-9]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    if (!normalized) return false;
-    return Array.from(ZERO_PERCENT_EXCEPTION_TANKS).some((token) => normalized.includes(token));
-};
-
-const isUsableExplicitPercentage = (tank = {}, value) => {
-    if (value === null || value === undefined || value === '') return false;
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return false;
-
-    if (numeric !== 0) return true;
-    if (!isZeroPercentExceptionTank(tank)) return true;
-
-    const nivel = Number.isFinite(Number(tank.valor_m)) ? Number(tank.valor_m)
-        : (Number.isFinite(Number(tank.nivel)) ? Number(tank.nivel) : null);
-    const altura = Number.isFinite(Number(tank.altura_rebose_calibrada)) ? Number(tank.altura_rebose_calibrada)
-        : (Number.isFinite(Number(tank.altura_rebose_m)) ? Number(tank.altura_rebose_m)
-            : (Number.isFinite(Number(tank.altura_rebose)) ? Number(tank.altura_rebose) : null));
-
-    return !(nivel != null && nivel > 0 && altura != null && altura > 0);
 };
 
 const calculateAutomaticPorcentaje = (nivel, altura_rebose) => {
@@ -394,7 +339,7 @@ const mergeTankWithCatalog = (tank, catalog) => {
         sourceTank.porcentaje_capacidad_api,
         sourceTank.porcentaje_api,
         sourceTank.porcentaje,
-    ].find((value) => isUsableExplicitPercentage(sourceTank, value));
+    ].find((value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)));
     const hasExplicitPercentage = apiPorcentaje !== undefined;
 
     const catalogHasCalibratedHeight = config != null && (
@@ -440,12 +385,12 @@ const mergeTankWithCatalog = (tank, catalog) => {
         volumen_restante_m3: sourceTank.volumen_restante_m3 ?? sourceTank.rebose ?? config?.volumen_restante_m3 ?? null,
         nombre: config?.nombre ?? sourceTank.nombre ?? sourceTank.display_name ?? sourceTank.tag ?? null,
         display_name: config?.display_name ?? sourceTank.display_name ?? sourceTank.nombre ?? sourceTank.tag ?? null,
-        // Si hay altura calibrada del catálogo, usar el porcentaje recalculado en todos los campos
-        // para que calculateDisplayPorcentaje() no lea el valor crudo de la API.
-        porcentaje_api: catalogHasCalibratedHeight ? computedPorcentaje : (Number.isFinite(Number(sourceTank.porcentaje)) ? Number(sourceTank.porcentaje) : null),
-        porcentaje_capacidad: catalogHasCalibratedHeight ? computedPorcentaje : (Number.isFinite(Number(sourceTank.porcentaje_capacidad)) ? Number(sourceTank.porcentaje_capacidad) : null),
+        // El porcentaje del API IBAL manda siempre que exista. Las alturas locales
+        // solo sirven de respaldo para sensores donde IBAL todavía envía null.
+        porcentaje_api: hasExplicitPercentage ? Number(apiPorcentaje) : computedPorcentaje,
+        porcentaje_capacidad: hasExplicitPercentage ? Number(apiPorcentaje) : computedPorcentaje,
         porcentaje_capacidad_api: Number.isFinite(Number(sourceTank.porcentaje_capacidad)) ? Number(sourceTank.porcentaje_capacidad) : null,
-        porcentaje: computedPorcentaje,
+        porcentaje: hasExplicitPercentage ? Number(apiPorcentaje) : computedPorcentaje,
         nivel: nivelActual,
         valor_m: sourceTank.valor_m,
     };

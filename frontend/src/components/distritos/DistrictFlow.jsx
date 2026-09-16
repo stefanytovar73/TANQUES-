@@ -4249,7 +4249,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     try {
       // Lightweight in-page trace array for automated tests (temporary)
       try { if (!window.__diagTrace) window.__diagTrace = []; window.__diagTrace.push('DO_SAVE_ENTER'); } catch (_) {}
-      console.info('[DIAGRAM TRACE] DO_SAVE_ENTER');
       // Build authoritative snapshot from the current runtime view the user is seeing.
       // Do NOT read baseline, localStorage or prior savedState here — use nodesRef/edgesRef exactly.
       const runtimeNodes = (rfInstance && typeof rfInstance.getNodes === 'function')
@@ -4270,7 +4269,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       };
 
       try { window.__diagTrace.push('SNAPSHOT_READY'); } catch(_){}
-      console.info('[DIAGRAM TRACE] SNAPSHOT_READY', { nodes: Object.keys(saved.nodes).length, edges: Array.isArray(saved.edges) ? saved.edges.length : 0 });
 
       // persist to localStorage immediately (source: local)
       try { writeDiagramState(saved, { source: 'local' }); } catch (e) {}
@@ -4293,14 +4291,11 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         pendingServerSaveRef.current = null;
 
         try { window.__diagTrace.push('SAVE_STATE_CALL'); } catch(_){}
-        console.info('[DIAGRAM TRACE] SAVE_STATE_CALL');
         const ok = await diagramService.saveState(saved);
         try { window.__diagTrace.push('SAVE_RESPONSE:' + (ok? 'ok':'false')); } catch(_){}
-        console.info('[DIAGRAM TRACE] SAVE_RESPONSE', { ok });
         if (!ok) throw new Error('diagramService.saveState returned false');
       } catch (e) {
         try { window.__diagTrace.push('SAVE_RESPONSE_ERROR:' + (e && e.message ? e.message : String(e))); } catch(_){}
-        console.info('[DIAGRAM TRACE] SAVE_RESPONSE_ERROR', e && e.message ? e.message : String(e));
         throw e;
       }
 

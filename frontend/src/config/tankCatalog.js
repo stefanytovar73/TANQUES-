@@ -379,7 +379,11 @@ const mergeTankWithCatalog = (tank, catalog) => {
     if (hasExplicitPercentage) {
         computedPorcentaje = Number(apiPorcentaje);
     } else if (catalogHasCalibratedHeight && !isBadQuality && nivelActual != null && rawAltura != null && rawAltura > 0) {
-        const alturaUsar = (config && config.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada))) ? Number(config.altura_rebose_calibrada) : rawAltura;
+        const alturaUsar = (officialFallbackHeight != null && Number.isFinite(Number(officialFallbackHeight)))
+            ? Number(officialFallbackHeight)
+            : ((config && config.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada)))
+                ? Number(config.altura_rebose_calibrada)
+                : rawAltura);
         const raw = calculateDisplayPorcentaje(nivelActual, alturaUsar);
         computedPorcentaje = (raw == null) ? null : Math.round(raw);
     } else if (!isBadQuality && nivelActual != null && rawAltura != null && rawAltura > 0) {

@@ -396,6 +396,7 @@ function _ensurePtapMetricsPolling() {
 
 function extractMetricVariables(response) {
   if (!response || typeof response !== 'object') return [];
+  if (Array.isArray(response)) return response;
 
   const candidates = [
     response.variables,
@@ -808,7 +809,7 @@ function findFlowMetricVariable(response, config = {}) {
 function formatFlowMetricVariable(variable, fallbackUnit = 'L/s') {
   if (!variable) return null;
 
-  const raw = variable.valor ?? variable.value ?? variable.valor_m ?? variable.lectura ?? variable.capacidad ?? null;
+  const raw = variable.valor ?? variable.value ?? variable.valor_m ?? variable.lectura ?? variable.capacidad ?? variable.capacidad_m3 ?? variable.caudal ?? variable.reading ?? null;
   if (raw === null || raw === undefined || raw === '') return null;
 
   const rawValue = parseMetricNumber(raw);

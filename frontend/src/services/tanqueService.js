@@ -5,12 +5,39 @@ let cacheExpiresAt = 0;
 let pendingRequest = null;
 const CACHE_TTL_MS = 30000;
 
+const SESSION_CACHE_KEY = 'ibal-tanques:tanques-cache';
+
+const readSessionCache = () => {
+  try {
+    const raw = sessionStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!Number.isFinite(Number(parsed.expiresAt)) || Date.now() >= Number(parsed.expiresAt)) {
+      sessionStorage.removeItem(SESSION_CACHE_KEY);
+      return null;
+    }
+    return parsed.data || null;
+  } catch {
+    return null;
+  }
+};
+
+const writeSessionCache = (data, expiresAt) => {
+  try {
+    sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify({ data, expiresAt }));
+  } catch {
+    // El cache de sesión es solo una optimización.
+  }
+};
+
 const tankServiceInternal = {};
 
 const invalidateCache = () => {
   cache = null;
   cacheExpiresAt = 0;
   pendingRequest = null;
+  try { sessionStorage.removeItem(SESSION_CACHE_KEY); } catch {}
 };
 
 const tanqueService = {
@@ -20,6 +47,15 @@ const tanqueService = {
       return cache;
     }
 
+    if (!forceRefresh && !cache) {
+      const sessionCached = readSessionCache();
+      if (sessionCached) {
+        cache = sessionCached;
+        cacheExpiresAt = now + CACHE_TTL_MS;
+        return cache;
+      }
+    }
+
     if (pendingRequest && !forceRefresh) {
       return pendingRequest;
     }
@@ -27,6 +63,7 @@ const tanqueService = {
     pendingRequest = api.get("/tanques").then((response) => {
       cache = response.data;
       cacheExpiresAt = Date.now() + CACHE_TTL_MS;
+      writeSessionCache(cache, cacheExpiresAt);
       pendingRequest = null;
       return cache;
     }).catch((error) => {
@@ -37,7 +74,12 @@ const tanqueService = {
     return pendingRequest;
   },
 
-  getCaptacion: async (forceRefresh = false) => {
+
+  peekTanques: () => {
+    if (cache && Date.now() < cacheExpiresAt) return cache;
+    return readSessionCache();
+  },
+getCaptacion: async (forceRefresh = false) => {
     // cache específico para captacion
     if (!tankServiceInternal.captacionCache) {
       tankServiceInternal.captacionCache = null;

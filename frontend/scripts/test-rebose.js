@@ -43,8 +43,9 @@ const heights = {
 
 const apiContractChecks = [
   { label: 'API percentage wins', tank: { valor_m: 4.78, porcentaje_capacidad: 42 }, expected: 42 },
+  { label: 'API decimal percentage is preserved', tank: { valor_m: 1.4517, porcentaje_capacidad: 32.99, altura_rebose_m: 4.4 }, expected: 32.99 },
   { label: 'API zero is preserved', tank: { valor_m: 4.78, porcentaje_capacidad: 0 }, expected: 0 },
-  { label: 'Null percentage stays null when the API omits it', tank: { valor_m: 4.78, porcentaje_capacidad: null, altura_rebose_m: null }, expected: null },
+  { label: 'API null stays null even when a local height could calculate a value', tank: { valor_m: 4.78, porcentaje_capacidad: null, altura_rebose_m: 5 }, expected: null },
   { label: 'Miramar API value is trusted', tank: { nombre: 'Miramar', display_name: 'Miramar', tag: 'NIVEL_MIRAMAR', valor_m: 4.78, porcentaje_capacidad: 0 }, expected: 0 },
 ];
 

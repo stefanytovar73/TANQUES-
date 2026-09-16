@@ -35,10 +35,14 @@ export default function useTanques() {
         // estático mientras llega la API.
         cargarTanques(!initialCached, false);
 
-        // Refrescar las tres fuentes juntas cada 30 s. Los componentes de Distritos
-        // reutilizan el caché resultante al renderizar.
+        // Refrescar las tres fuentes cada 30 s sin duplicar /tanques.
         const intervalo = window.setInterval(() => {
-            try { tanqueService.preloadDistrictData?.(true); } catch (e) {}
+            try {
+                Promise.allSettled([
+                    tanqueService.getCaptacion(true),
+                    tanqueService.getPtap(true),
+                ]);
+            } catch (e) {}
             cargarTanques(false, true);
         }, 30000);
         return () => clearInterval(intervalo);

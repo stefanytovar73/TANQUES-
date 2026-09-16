@@ -4,6 +4,10 @@ let cache = null;
 let cacheExpiresAt = 0;
 let pendingRequest = null;
 
+let districtBootstrapCache = null;
+let districtBootstrapExpiresAt = 0;
+let districtBootstrapPending = null;
+
 const CACHE_TTL_MS = 30000;
 const LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -56,16 +60,9 @@ const writeStored = (storage, key, data, expiresAt = null) => {
 const readFreshSession = (key) => {
   try { return readStored(sessionStorage, key); } catch { return null; }
 };
+
 const readLastKnown = (key) => {
   try { return readStored(localStorage, key, LAST_KNOWN_MAX_AGE_MS); } catch { return null; }
-};
-
-const invalidateCache = () => {
-  cache = null;
-  cacheExpiresAt = 0;
-  pendingRequest = null;
-  try { sessionStorage.removeItem(STORAGE_KEYS.tanquesFresh); } catch {}
-  try { localStorage.removeItem(STORAGE_KEYS.tanquesLast); } catch {}
 };
 
 const normalizeTanquesResponse = (payload) => {
@@ -91,7 +88,76 @@ const normalizeTanquesResponse = (payload) => {
   return payload;
 };
 
-const getMetric = async ({ kind, url, freshKey, lastKey, initialWindowKey, forceRefresh = false }) => {
+const seedTanques = (payload) => {
+  const normalized = normalizeTanquesResponse(payload);
+  const expiresAt = Date.now() + CACHE_TTL_MS;
+  cache = normalized;
+  cacheExpiresAt = expiresAt;
+  writeStored(sessionStorage, STORAGE_KEYS.tanquesFresh, normalized, expiresAt);
+  writeStored(localStorage, STORAGE_KEYS.tanquesLast, normalized);
+  return normalized;
+};
+
+const seedMetric = (kind, payload, freshKey, lastKey) => {
+  if (!payload || typeof payload !== 'object') return null;
+  const expiresAt = Date.now() + CACHE_TTL_MS;
+  tankServiceInternal[`${kind}Cache`] = payload;
+  tankServiceInternal[`${kind}ExpiresAt`] = expiresAt;
+  writeStored(sessionStorage, freshKey, payload, expiresAt);
+  writeStored(localStorage, lastKey, payload);
+  return payload;
+};
+
+const peekTanquesInternal = () => {
+  if (cache && Date.now() < cacheExpiresAt) return cache;
+  const candidate = readFreshSession(STORAGE_KEYS.tanquesFresh) || readLastKnown(STORAGE_KEYS.tanquesLast);
+  try { return candidate ? normalizeTanquesResponse(candidate) : null; } catch { return null; }
+};
+
+const peekMetric = (kind, freshKey, lastKey) => {
+  const cacheKey = `${kind}Cache`;
+  const expiresKey = `${kind}ExpiresAt`;
+  if (tankServiceInternal[cacheKey] && Date.now() < tankServiceInternal[expiresKey]) {
+    return tankServiceInternal[cacheKey];
+  }
+  return readFreshSession(freshKey) || readLastKnown(lastKey);
+};
+
+const peekDistrictDataInternal = () => {
+  const tanques = peekTanquesInternal();
+  const captacion = peekMetric('captacion', STORAGE_KEYS.captacionFresh, STORAGE_KEYS.captacionLast);
+  const ptap = peekMetric('ptap', STORAGE_KEYS.ptapFresh, STORAGE_KEYS.ptapLast);
+  if (!tanques || !captacion || !ptap) return null;
+  return { tanques, captacion, ptap };
+};
+
+const fetchTanquesDirect = async (forceRefresh = false) => {
+  const now = Date.now();
+  if (!forceRefresh && cache && now < cacheExpiresAt) return cache;
+
+  if (!forceRefresh && !cache) {
+    try {
+      if (typeof window !== 'undefined' && window.__INITIAL_TANQUES) {
+        return seedTanques(window.__INITIAL_TANQUES);
+      }
+    } catch {}
+
+    const fresh = readFreshSession(STORAGE_KEYS.tanquesFresh);
+    if (fresh) return seedTanques(fresh);
+  }
+
+  if (pendingRequest) return pendingRequest;
+
+  pendingRequest = api.get("/tanques")
+    .then((response) => seedTanques(response.data))
+    .finally(() => {
+      pendingRequest = null;
+    });
+
+  return pendingRequest;
+};
+
+const fetchMetricDirect = async ({ kind, url, freshKey, lastKey, initialWindowKey, forceRefresh = false }) => {
   const cacheKey = `${kind}Cache`;
   const expiresKey = `${kind}ExpiresAt`;
   const pendingKey = `${kind}Pending`;
@@ -104,34 +170,17 @@ const getMetric = async ({ kind, url, freshKey, lastKey, initialWindowKey, force
   if (!forceRefresh && !tankServiceInternal[cacheKey]) {
     try {
       const initial = typeof window !== 'undefined' ? window[initialWindowKey] : null;
-      if (initial) {
-        tankServiceInternal[cacheKey] = initial;
-        tankServiceInternal[expiresKey] = now + CACHE_TTL_MS;
-        return initial;
-      }
+      if (initial) return seedMetric(kind, initial, freshKey, lastKey);
     } catch {}
 
     const fresh = readFreshSession(freshKey);
-    if (fresh) {
-      tankServiceInternal[cacheKey] = fresh;
-      tankServiceInternal[expiresKey] = now + CACHE_TTL_MS;
-      return fresh;
-    }
+    if (fresh) return seedMetric(kind, fresh, freshKey, lastKey);
   }
 
-  // Nunca duplicar una llamada en curso; todos los consumidores comparten la misma promesa.
   if (tankServiceInternal[pendingKey]) return tankServiceInternal[pendingKey];
 
   tankServiceInternal[pendingKey] = api.get(url)
-    .then((res) => {
-      const data = res.data;
-      const expiresAt = Date.now() + CACHE_TTL_MS;
-      tankServiceInternal[cacheKey] = data;
-      tankServiceInternal[expiresKey] = expiresAt;
-      writeStored(sessionStorage, freshKey, data, expiresAt);
-      writeStored(localStorage, lastKey, data);
-      return data;
-    })
+    .then((res) => seedMetric(kind, res.data, freshKey, lastKey))
     .finally(() => {
       tankServiceInternal[pendingKey] = null;
     });
@@ -139,95 +188,135 @@ const getMetric = async ({ kind, url, freshKey, lastKey, initialWindowKey, force
   return tankServiceInternal[pendingKey];
 };
 
-const peekMetric = (kind, freshKey, lastKey) => {
-  const cacheKey = `${kind}Cache`;
-  const expiresKey = `${kind}ExpiresAt`;
-  if (tankServiceInternal[cacheKey] && Date.now() < tankServiceInternal[expiresKey]) {
-    return tankServiceInternal[cacheKey];
+const seedBootstrap = (payload) => {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Respuesta inválida de /api/distritos/bootstrap');
   }
-  return readFreshSession(freshKey) || readLastKnown(lastKey);
+
+  const tanques = payload.tanques ? seedTanques(payload.tanques) : null;
+  const captacion = payload.captacion
+    ? seedMetric('captacion', payload.captacion, STORAGE_KEYS.captacionFresh, STORAGE_KEYS.captacionLast)
+    : null;
+  const ptap = payload.ptap
+    ? seedMetric('ptap', payload.ptap, STORAGE_KEYS.ptapFresh, STORAGE_KEYS.ptapLast)
+    : null;
+
+  if (!tanques || !captacion || !ptap) {
+    throw new Error('El bootstrap de Distritos llegó incompleto');
+  }
+
+  districtBootstrapCache = { tanques, captacion, ptap };
+  districtBootstrapExpiresAt = Date.now() + CACHE_TTL_MS;
+  return districtBootstrapCache;
+};
+
+const invalidateCache = () => {
+  cache = null;
+  cacheExpiresAt = 0;
+  pendingRequest = null;
+  districtBootstrapCache = null;
+  districtBootstrapExpiresAt = 0;
+  districtBootstrapPending = null;
+  try { sessionStorage.removeItem(STORAGE_KEYS.tanquesFresh); } catch {}
+  try { localStorage.removeItem(STORAGE_KEYS.tanquesLast); } catch {}
 };
 
 const tanqueService = {
-  getTanques: async (forceRefresh = false) => {
+  // Fuente principal de Distritos. El backend consulta tanques + captación + PTAP
+  // en paralelo y no se libera el render hasta tener las tres fuentes.
+  getDistrictBootstrap: async (forceRefresh = false) => {
     const now = Date.now();
-    if (!forceRefresh && cache && now < cacheExpiresAt) return cache;
 
-    if (!forceRefresh && !cache) {
-      try {
-        if (typeof window !== 'undefined' && window.__INITIAL_TANQUES) {
-          cache = normalizeTanquesResponse(window.__INITIAL_TANQUES);
-          cacheExpiresAt = now + CACHE_TTL_MS;
-          return cache;
+    if (!forceRefresh && districtBootstrapCache && now < districtBootstrapExpiresAt) {
+      return districtBootstrapCache;
+    }
+
+    if (!forceRefresh) {
+      const cachedBundle = peekDistrictDataInternal();
+      if (cachedBundle) {
+        districtBootstrapCache = cachedBundle;
+        districtBootstrapExpiresAt = now + CACHE_TTL_MS;
+        // Refrescar en segundo plano sin bloquear la UI que ya tiene las tres fuentes.
+        if (!districtBootstrapPending) {
+          districtBootstrapPending = api.get('/distritos/bootstrap')
+            .then((res) => seedBootstrap(res.data))
+            .catch(() => cachedBundle)
+            .finally(() => { districtBootstrapPending = null; });
         }
-      } catch {}
-
-      const fresh = readFreshSession(STORAGE_KEYS.tanquesFresh);
-      if (fresh) {
-        cache = normalizeTanquesResponse(fresh);
-        cacheExpiresAt = now + CACHE_TTL_MS;
-        return cache;
+        return cachedBundle;
       }
     }
 
-    if (pendingRequest) return pendingRequest;
+    if (districtBootstrapPending) return districtBootstrapPending;
 
-    pendingRequest = api.get("/tanques")
-      .then((response) => {
-        cache = normalizeTanquesResponse(response.data);
-        cacheExpiresAt = Date.now() + CACHE_TTL_MS;
-        writeStored(sessionStorage, STORAGE_KEYS.tanquesFresh, cache, cacheExpiresAt);
-        writeStored(localStorage, STORAGE_KEYS.tanquesLast, cache);
-        return cache;
+    districtBootstrapPending = api.get('/distritos/bootstrap')
+      .then((res) => seedBootstrap(res.data))
+      .catch(async (bootstrapError) => {
+        // Compatibilidad temporal si el backend local aún no se reinició o la
+        // nueva ruta todavía no está disponible.
+        const [tanquesResult, captacionResult, ptapResult] = await Promise.allSettled([
+          fetchTanquesDirect(forceRefresh),
+          fetchMetricDirect({
+            kind: 'captacion',
+            url: '/caudales/captacion',
+            freshKey: STORAGE_KEYS.captacionFresh,
+            lastKey: STORAGE_KEYS.captacionLast,
+            initialWindowKey: '__INITIAL_CAPTACION',
+            forceRefresh,
+          }),
+          fetchMetricDirect({
+            kind: 'ptap',
+            url: '/caudales/ptap',
+            freshKey: STORAGE_KEYS.ptapFresh,
+            lastKey: STORAGE_KEYS.ptapLast,
+            initialWindowKey: '__INITIAL_PTAP',
+            forceRefresh,
+          }),
+        ]);
+
+        if (tanquesResult.status !== 'fulfilled' || captacionResult.status !== 'fulfilled' || ptapResult.status !== 'fulfilled') {
+          throw bootstrapError;
+        }
+
+        districtBootstrapCache = {
+          tanques: tanquesResult.value,
+          captacion: captacionResult.value,
+          ptap: ptapResult.value,
+        };
+        districtBootstrapExpiresAt = Date.now() + CACHE_TTL_MS;
+        return districtBootstrapCache;
       })
       .finally(() => {
-        pendingRequest = null;
+        districtBootstrapPending = null;
       });
 
-    return pendingRequest;
+    return districtBootstrapPending;
   },
 
-  peekTanques: () => {
-    if (cache && Date.now() < cacheExpiresAt) return cache;
-    const candidate = readFreshSession(STORAGE_KEYS.tanquesFresh) || readLastKnown(STORAGE_KEYS.tanquesLast);
-    try { return candidate ? normalizeTanquesResponse(candidate) : null; } catch { return null; }
+  peekDistrictData: () => peekDistrictDataInternal(),
+
+  getTanques: async (forceRefresh = false) => {
+    const bundle = await tanqueService.getDistrictBootstrap(forceRefresh);
+    return bundle.tanques;
   },
 
-  getCaptacion: async (forceRefresh = false) => getMetric({
-    kind: 'captacion',
-    url: '/caudales/captacion',
-    freshKey: STORAGE_KEYS.captacionFresh,
-    lastKey: STORAGE_KEYS.captacionLast,
-    initialWindowKey: '__INITIAL_CAPTACION',
-    forceRefresh,
-  }),
+  peekTanques: () => peekTanquesInternal(),
+
+  getCaptacion: async (forceRefresh = false) => {
+    const bundle = await tanqueService.getDistrictBootstrap(forceRefresh);
+    return bundle.captacion;
+  },
 
   peekCaptacion: () => peekMetric('captacion', STORAGE_KEYS.captacionFresh, STORAGE_KEYS.captacionLast),
 
-  getPtap: async (forceRefresh = false) => getMetric({
-    kind: 'ptap',
-    url: '/caudales/ptap',
-    freshKey: STORAGE_KEYS.ptapFresh,
-    lastKey: STORAGE_KEYS.ptapLast,
-    initialWindowKey: '__INITIAL_PTAP',
-    forceRefresh,
-  }),
+  getPtap: async (forceRefresh = false) => {
+    const bundle = await tanqueService.getDistrictBootstrap(forceRefresh);
+    return bundle.ptap;
+  },
 
   peekPtap: () => peekMetric('ptap', STORAGE_KEYS.ptapFresh, STORAGE_KEYS.ptapLast),
 
-  // Inicia las tres fuentes de Distritos al mismo tiempo.
-  preloadDistrictData: async (forceRefresh = false) => {
-    const [tanques, captacion, ptap] = await Promise.allSettled([
-      tanqueService.getTanques(forceRefresh),
-      tanqueService.getCaptacion(forceRefresh),
-      tanqueService.getPtap(forceRefresh),
-    ]);
-    return {
-      tanques: tanques.status === 'fulfilled' ? tanques.value : null,
-      captacion: captacion.status === 'fulfilled' ? captacion.value : null,
-      ptap: ptap.status === 'fulfilled' ? ptap.value : null,
-    };
-  },
+  preloadDistrictData: async (forceRefresh = false) => tanqueService.getDistrictBootstrap(forceRefresh),
 
   getTanqueById: async (id) => {
     const response = await api.get(`/tanques/${id}`);

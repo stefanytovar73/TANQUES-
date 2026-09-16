@@ -1123,6 +1123,14 @@ const AUTO_HANDLE_STYLE = {
   zIndex: 0,
 };
 
+function rotateCardinalPosition(position, angleDeg = 0) {
+  const normalized = ((Number(angleDeg) || 0) % 360 + 360) % 360;
+  const steps = ((Math.round(normalized / 90) % 4) + 4) % 4;
+  const order = [Position.Top, Position.Right, Position.Bottom, Position.Left];
+  const index = order.indexOf(position);
+  return index >= 0 ? order[(index + steps) % 4] : position;
+}
+
 function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68 }) {
   const width = Math.max(1, Number(right) - Number(left));
   const height = Math.max(1, Number(bottom) - Number(top));
@@ -1737,16 +1745,16 @@ function FlowTankNode(props) {
   return (
     <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
       {/* Handles — solo visibles en editMode */}
-      <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
-      <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
-      <Handle type="target" position={Position.Top}    id="t-top"    style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
-      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, rotation)}    id="t-top"    style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, rotation)} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
 
       {/* Cuatro puntos extra, alternados en las esquinas del tanque. */}
-      <Handle type="target" position={Position.Left} id="t-top-left" style={{ ...handleStyle, left: topLeftHandle.left, top: topLeftHandle.top }} />
-      <Handle type="source" position={Position.Right} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
-      <Handle type="source" position={Position.Left} id="s-bottom-left" style={{ ...handleStyle, left: bottomLeftHandle.left, top: bottomLeftHandle.top }} />
-      <Handle type="target" position={Position.Right} id="t-bottom-right" style={{ ...handleStyle, left: bottomRightHandle.left, top: bottomRightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)} id="t-top-left" style={{ ...handleStyle, left: topLeftHandle.left, top: topLeftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Left, rotation)} id="s-bottom-left" style={{ ...handleStyle, left: bottomLeftHandle.left, top: bottomLeftHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Right, rotation)} id="t-bottom-right" style={{ ...handleStyle, left: bottomRightHandle.left, top: bottomRightHandle.top }} />
       <AutoInvisibleHandles
         left={innerOffsetX + 20 * tankScale}
         right={innerOffsetX + 100 * tankScale}
@@ -1956,10 +1964,10 @@ function FlowPlantNode(props) {
           {metricLabel}
         </div>
       ) : null}
-      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
-      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
-      <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
-      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, rotation)} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, rotation)} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
       <AutoInvisibleHandles left={6} right={w - 6} top={14} bottom={h - 14} />
 
       <div style={{ width: 200, height: 80, overflow: 'visible' }}>
@@ -2116,10 +2124,10 @@ function FlowDistrictNode(props) {
 
   return (
     <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
-      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
-      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
-      <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
-      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, rotation)} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, rotation)} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
       <AutoInvisibleHandles left={6} right={w - 6} top={4} bottom={h - 4} />
 
       <div style={{ width: 160, height: 48, overflow: 'visible' }}>
@@ -2297,12 +2305,6 @@ function FlowShapeNode(props) {
       top: shapeCy + (dx * Math.sin(rad) + dy * Math.cos(rad)),
     };
   };
-  const rotateHandlePosition = (position) => {
-    const steps = ((Math.round(normalizedRotation / 90) % 4) + 4) % 4;
-    const order = [Position.Top, Position.Right, Position.Bottom, Position.Left];
-    const index = order.indexOf(position);
-    return index >= 0 ? order[(index + steps) % 4] : position;
-  };
   const shapeLeftHandle = rotateShapePoint(2, shapeCy);
   const shapeRightHandle = rotateShapePoint(width - 2, shapeCy);
   const shapeTopHandle = rotateShapePoint(shapeCx, 2);
@@ -2382,10 +2384,10 @@ function FlowShapeNode(props) {
           {effectiveMetricText}
         </div>
       ) : null}
-      <Handle type="target" position={rotateHandlePosition(Position.Left)} id="t-left" style={{ ...handleStyle, left: shapeLeftHandle.left, top: shapeLeftHandle.top }} />
-      <Handle type="source" position={rotateHandlePosition(Position.Right)} id="s-right" style={{ ...handleStyle, left: shapeRightHandle.left, top: shapeRightHandle.top }} />
-      <Handle type="target" position={rotateHandlePosition(Position.Top)} id="t-top" style={{ ...handleStyle, left: shapeTopHandle.left, top: shapeTopHandle.top }} />
-      <Handle type="source" position={rotateHandlePosition(Position.Bottom)} id="s-bottom" style={{ ...handleStyle, left: shapeBottomHandle.left, top: shapeBottomHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, normalizedRotation)} id="t-left" style={{ ...handleStyle, left: shapeLeftHandle.left, top: shapeLeftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, normalizedRotation)} id="s-right" style={{ ...handleStyle, left: shapeRightHandle.left, top: shapeRightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, normalizedRotation)} id="t-top" style={{ ...handleStyle, left: shapeTopHandle.left, top: shapeTopHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, normalizedRotation)} id="s-bottom" style={{ ...handleStyle, left: shapeBottomHandle.left, top: shapeBottomHandle.top }} />
       <AutoInvisibleHandles left={2} right={width - 2} top={2} bottom={height - 2} />
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
         <g transform={`translate(${width / 2}, ${height / 2}) rotate(${Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0}) translate(${-width / 2}, ${-height / 2})`}>

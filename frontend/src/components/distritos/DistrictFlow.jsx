@@ -678,9 +678,14 @@ function getMetricConfigForNodeId(nodeId) {
   const direct = FLOW_METRIC_CONFIG[key];
   if (direct) return direct;
 
-  const legacyTag = MACKENFLOC_SHAPE_TAGS[key];
-  if (legacyTag) {
-    return { service: 'ptap', tag: legacyTag, defaultUnit: 'L/s' };
+  const mackenTag = MACKENFLOC_SHAPE_TAGS[key];
+  if (mackenTag) {
+    return { service: 'ptap', tag: mackenTag, defaultUnit: 'm³' };
+  }
+
+  const operationalTag = OPERATIONAL_SHAPE_TAGS[key];
+  if (operationalTag) {
+    return { service: 'ptap', tag: operationalTag, defaultUnit: 'L/s' };
   }
 
   return null;
@@ -842,6 +847,49 @@ function enrichTankNodeMetrics(data = {}) {
   };
 }
 
+function getCachedTankTelemetryForNode(nodeId, nodeData = {}) {
+  try {
+    const response = tanqueService.peekTanques?.();
+    const list = Array.isArray(response?.tanques) ? response.tanques : [];
+    if (!list.length) return null;
+
+    const idKey = String(nodeId || nodeData?.id || '').trim();
+    const explicitTag = EXACT_TANK_TAG_BY_NODE_ID[idKey] || nodeData?.tag || null;
+    let found = null;
+
+    if (explicitTag) {
+      const wanted = String(explicitTag).trim().toUpperCase();
+      found = list.find((tank) => String(tank?.tag || '').trim().toUpperCase() === wanted) || null;
+    }
+
+    if (!found) {
+      const candidates = [
+        nodeData?.apiName,
+        nodeData?.originalName,
+        nodeData?.tag,
+        nodeData?.display_name,
+        nodeData?.nombre,
+        nodeData?.label,
+        idKey,
+      ].filter((value) => value != null && String(value).trim());
+
+      found = list.find((tank) => {
+        const tankCandidates = [tank?.tag, tank?.nombre, tank?.display_name, tank?.id]
+          .filter((value) => value != null && String(value).trim());
+        return candidates.some((candidate) => tankCandidates.some((tankValue) =>
+          textMatchesComparableAlias(candidate, tankValue)
+        ));
+      }) || null;
+    }
+
+    if (!found) return null;
+    const merged = (mergeApiTanquesWithCatalog([found], loadCatalog()) || [found])[0] || found;
+    return enrichTankNodeMetrics(merged || {});
+  } catch (e) {
+    return null;
+  }
+}
+
 function normalizeDiagramNodeEntries(rawNodes) {
   if (Array.isArray(rawNodes)) return rawNodes.filter((entry) => entry && typeof entry === 'object');
   if (rawNodes && typeof rawNodes === 'object') return Object.values(rawNodes).filter((entry) => entry && typeof entry === 'object');
@@ -924,6 +972,7 @@ function getLayoutedElements(nodes, edges, direction = 'LR') {
 function FlowTankNode(props) {
   const { data } = props || {};
   const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
+  const cachedTankTelemetry = getCachedTankTelemetryForNode(nodeData?.id ?? data?.id, nodeData || data || {});
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(getNodeDisplayName({ data: nodeData }));
   const inputRef = useRef(null);
@@ -1044,9 +1093,12 @@ function FlowTankNode(props) {
             // Ensure TankNode receives metric fields whether they're on nodeData or top-level data
             const mergedNodeData = {
               ...(nodeData || {}),
-              valor_m: (nodeData && nodeData.valor_m != null) ? nodeData.valor_m : (data && data.valor_m != null ? data.valor_m : null),
-              nivel:   (nodeData && nodeData.nivel   != null) ? nodeData.nivel   : (data && data.nivel   != null ? data.nivel   : null),
-              porcentaje: (nodeData && nodeData.porcentaje != null) ? nodeData.porcentaje : (data && data.porcentaje != null ? data.porcentaje : null),
+              valor_m: cachedTankTelemetry?.valor_m ?? ((nodeData && nodeData.valor_m != null) ? nodeData.valor_m : (data && data.valor_m != null ? data.valor_m : null)),
+              nivel: cachedTankTelemetry?.nivel ?? ((nodeData && nodeData.nivel != null) ? nodeData.nivel : (data && data.nivel != null ? data.nivel : null)),
+              porcentaje: cachedTankTelemetry?.porcentaje ?? ((nodeData && nodeData.porcentaje != null) ? nodeData.porcentaje : (data && data.porcentaje != null ? data.porcentaje : null)),
+              porcentaje_capacidad: cachedTankTelemetry?.porcentaje_capacidad ?? nodeData?.porcentaje_capacidad ?? null,
+              altura_rebose: cachedTankTelemetry?.altura_rebose ?? nodeData?.altura_rebose ?? null,
+              altura_rebose_calibrada: cachedTankTelemetry?.altura_rebose_calibrada ?? nodeData?.altura_rebose_calibrada ?? null,
               // keep id and attach manual pct handler for the TankNode UI
               id: nodeData && nodeData.id ? nodeData.id : (data && data.id ? data.id : null),
               onManualPctChange: (p) => { try { setNodeManualPercentage((nodeData && nodeData.id) || (data && data.id), p); } catch (e) {} },
@@ -1502,8 +1554,13 @@ function FlowShapeNode(props) {
     setDraft(runtimeDisplayName);
   }, [runtimeDisplayName]);
 
-  const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '') ? String(runtimeNodeData.ptapMetricText) : null;
-  const metricLabel = (runtimeNodeData && runtimeNodeData.ptapMetricLabel != null && runtimeNodeData.ptapMetricLabel !== '') ? String(runtimeNodeData.ptapMetricLabel) : null;
+  const cachedMetricText = getCachedFlowMetricForNodeId(runtimeNodeData?.id ?? data?.id);
+  const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '')
+    ? String(runtimeNodeData.ptapMetricText)
+    : cachedMetricText;
+  const metricLabel = (runtimeNodeData && runtimeNodeData.ptapMetricLabel != null && runtimeNodeData.ptapMetricLabel !== '')
+    ? String(runtimeNodeData.ptapMetricLabel)
+    : null;
   const isChembeNode = String(runtimeNodeData?.id ?? '').trim() === 'ptap-chembe';
   const _resolvedExactTag = getExactMackenflocTagForNode({ id: runtimeNodeData && runtimeNodeData.id, label: runtimeNodeData && runtimeNodeData.label }, runtimeNodeData, _ptapMetricsMap);
   const isMackenflocShape = Boolean(_resolvedExactTag && String(_resolvedExactTag).toUpperCase().includes('MACKENFLOC'));
@@ -1850,6 +1907,26 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
   const draftPositionsRef = useRef(new Map());
   useEffect(() => {
     diagramModeRef.current = diagramMode;
+    const editing = diagramMode === 'edit';
+    setNodes((current) => {
+      const updated = (current || []).map((node) => {
+        const nd = node?.data?.nodeData || node?.data || {};
+        return {
+          ...node,
+          draggable: editing,
+          data: {
+            ...(node.data || {}),
+            lockedPosition: editing ? false : Boolean(node.data?.lockedPosition),
+            nodeData: {
+              ...nd,
+              lockedPosition: editing ? false : Boolean(nd.lockedPosition),
+            },
+          },
+        };
+      });
+      nodesRef.current = updated;
+      return updated;
+    });
   }, [diagramMode]);
 
   const [wsQueueSize, setWsQueueSize] = useState(0);
@@ -2931,7 +3008,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     });
   }, [selectedNodeId, persistDistrictState]);
 
-  const changeSelectedNodeShape = useCallback((targetId = selectedNodeId, nextShapeType = null) => {
+  const changeSelectedNodeShape = useCallback(async (targetId = selectedNodeId, nextShapeType = null) => {
     const idToUpdate = targetId || selectedNodeId;
     const nextType = String(nextShapeType || '').trim();
     if (!idToUpdate || !nextType) return false;
@@ -2958,6 +3035,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         ...n,
         type: 'shape',
         shapeType: nextType,
+        draggable: diagramModeRef.current === 'edit',
         data: {
           ...(n.data || {}),
           type: 'shape',
@@ -2969,16 +3047,26 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
     nodesRef.current = updated;
     setNodes([...updated]);
+
     try {
-      persistDistrictState(updated, edgesRef.current, {
+      await persistDistrictState(updated, edgesRef.current, {
         force: true,
         skipReadBaseline: true,
-        sendToServer: true,
+        sendToServer: false,
         _diagOpId: `shape:${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
       });
-    } catch (e) {}
-    return true;
-  }, [selectedNodeId, persistDistrictState]);
+
+      const payload = readDiagramState();
+      const ok = await diagramService.saveState(payload);
+      if (!ok) return false;
+
+      window.location.reload();
+      return true;
+    } catch (e) {
+      console.warn('[DIAGRAM] cambio de figura no pudo guardarse', e);
+      return false;
+    }
+  }, [selectedNodeId, persistDistrictState, readDiagramState]);
 
   // Set a manual percentage for a single node. Persist minimal config only.
   const setNodeManualPercentage = useCallback((id, pct) => {
@@ -5141,7 +5229,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         zoomOnScroll={true}
         panOnDrag
         snapToGrid={false}
-        nodesDraggable={true}
+        nodesDraggable={diagramMode === 'edit'}
         elementsSelectable={true}
         nodesConnectable={editMode && (diagramMode === 'edit' || editMode)}
         connectOnClick={editMode && (diagramMode === 'edit' || editMode)}

@@ -206,6 +206,29 @@ const findCatalogEntry = (tank, catalog = null) => {
     return safeMatch || null;
 };
 
+const getDashboardFallbackHeight = (tank = {}) => {
+    const identity = [
+        tank.tag,
+        tank.apiTag,
+        tank.apiName,
+        tank.originalName,
+        tank.nombre,
+        tank.display_name,
+        tank.label,
+        tank.name,
+        tank.id,
+    ]
+        .filter(Boolean)
+        .map((value) => normalizeText(String(value).replace(/[_-]+/g, " ")))
+        .join(" ");
+
+    if (!identity) return null;
+    if (identity.includes("calucaima")) return 6.0;
+    if (identity.includes("miramar")) return 6.0;
+    if (identity.includes("zona industrial")) return 6.0;
+    return null;
+};
+
 const calculateAutomaticPorcentaje = (nivel, altura_rebose) => {
     // Delegate to centralized calculation in tanqueMetrics to ensure a single rule
     return calcPorcentaje(nivel, altura_rebose);
@@ -323,14 +346,17 @@ const mergeTankWithCatalog = (tank, catalog) => {
     //  3. API altura_rebose_m             ← raw del sensor (útil solo cuando no hay catálogo)
     //  4. API altura_rebose               ← último recurso
     // Prefer catalog calibrated height when available (identity-stable mapping ensured above)
-    const rawAltura = (config?.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada)))
-        ? Number(config.altura_rebose_calibrada)
-        : ((config?.altura_rebose != null && Number.isFinite(Number(config.altura_rebose)))
-            ? Number(config.altura_rebose)
-            : ((sourceTank.altura_rebose_m !== null && sourceTank.altura_rebose_m !== undefined && sourceTank.altura_rebose_m !== '') && Number.isFinite(Number(sourceTank.altura_rebose_m))
-                ? Number(sourceTank.altura_rebose_m)
-                : ((sourceTank.altura_rebose !== null && sourceTank.altura_rebose !== undefined && sourceTank.altura_rebose !== '') && Number.isFinite(Number(sourceTank.altura_rebose))
-                    ? Number(sourceTank.altura_rebose) : null)));
+    const dashboardFallbackHeight = getDashboardFallbackHeight(sourceTank);
+    const rawAltura = dashboardFallbackHeight != null
+        ? dashboardFallbackHeight
+        : ((config?.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada)))
+            ? Number(config.altura_rebose_calibrada)
+            : ((config?.altura_rebose != null && Number.isFinite(Number(config.altura_rebose)))
+                ? Number(config.altura_rebose)
+                : ((sourceTank.altura_rebose_m !== null && sourceTank.altura_rebose_m !== undefined && sourceTank.altura_rebose_m !== '') && Number.isFinite(Number(sourceTank.altura_rebose_m))
+                    ? Number(sourceTank.altura_rebose_m)
+                    : ((sourceTank.altura_rebose !== null && sourceTank.altura_rebose !== undefined && sourceTank.altura_rebose !== '') && Number.isFinite(Number(sourceTank.altura_rebose))
+                        ? Number(sourceTank.altura_rebose) : null))));
 
     const isBadQuality = sourceTank.calidad === 'DUDOSA' || sourceTank.sin_datos === true;
 

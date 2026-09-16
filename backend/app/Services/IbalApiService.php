@@ -3,11 +3,95 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class IbalApiService
 {
+    public function obtenerDistritosBootstrap()
+    {
+        $tanquesCacheKey = __CLASS__ . '::obtenerTanques';
+        $captacionCacheKey = __CLASS__ . '::obtenerCaptacion';
+        $ptapCacheKey = __CLASS__ . '::obtenerPtap';
+
+        $cachedTanques = Cache::get($tanquesCacheKey);
+        $cachedCaptacion = Cache::get($captacionCacheKey);
+        $cachedPtap = Cache::get($ptapCacheKey);
+
+        // Si las tres fuentes siguen vigentes, devolverlas juntas inmediatamente.
+        if ($cachedTanques && $cachedCaptacion && $cachedPtap) {
+            return [
+                'status' => 'ok',
+                'tanques' => $cachedTanques,
+                'captacion' => $cachedCaptacion,
+                'ptap' => $cachedPtap,
+            ];
+        }
+
+        $baseUrl = rtrim(env('IBAL_API_URL'), '/');
+        $headers = ['X-API-Key' => env('IBAL_API_KEY')];
+
+        try {
+            // Una sola petición del frontend y tres solicitudes salientes concurrentes.
+            // Esto evita que php artisan serve procese /tanques, /captacion y /ptap
+            // de forma secuencial y permite pintar toda la telemetría a la vez.
+            $responses = Http::pool(fn (Pool $pool) => [
+                $pool->as('tanques')->withHeaders($headers)->retry(2, 100)->timeout(10)->get($baseUrl . '/tanques'),
+                $pool->as('captacion')->withHeaders($headers)->retry(2, 100)->timeout(10)->get($baseUrl . '/captacion'),
+                $pool->as('ptap')->withHeaders($headers)->retry(2, 100)->timeout(10)->get($baseUrl . '/ptap'),
+            ]);
+
+            $tanques = $cachedTanques;
+            $captacion = $cachedCaptacion;
+            $ptap = $cachedPtap;
+
+            if (isset($responses['tanques']) && $responses['tanques']->successful()) {
+                $candidate = $responses['tanques']->json();
+                if (is_array($candidate) && isset($candidate['tanques']) && is_array($candidate['tanques']) && count($candidate['tanques']) > 0) {
+                    $tanques = $candidate;
+                    Cache::put($tanquesCacheKey, $candidate, now()->addSeconds(30));
+                }
+            }
+
+            if (isset($responses['captacion']) && $responses['captacion']->successful()) {
+                $candidate = $responses['captacion']->json();
+                if (is_array($candidate)) {
+                    $captacion = $candidate;
+                    Cache::put($captacionCacheKey, $candidate, now()->addSeconds(30));
+                }
+            }
+
+            if (isset($responses['ptap']) && $responses['ptap']->successful()) {
+                $candidate = $responses['ptap']->json();
+                if (is_array($candidate)) {
+                    $ptap = $candidate;
+                    Cache::put($ptapCacheKey, $candidate, now()->addSeconds(30));
+                }
+            }
+
+            return [
+                'status' => ($tanques && $captacion && $ptap) ? 'ok' : 'partial',
+                'tanques' => $tanques,
+                'captacion' => $captacion,
+                'ptap' => $ptap,
+            ];
+        } catch (\Throwable $e) {
+            Log::error('IbalApiService::obtenerDistritosBootstrap excepción', [
+                'message' => $e->getMessage(),
+                'exception' => get_class($e),
+            ]);
+
+            return [
+                'status' => 'error',
+                'mensaje' => 'No fue posible cargar toda la telemetría IBAL',
+                'tanques' => $cachedTanques,
+                'captacion' => $cachedCaptacion,
+                'ptap' => $cachedPtap,
+            ];
+        }
+    }
+
     public function obtenerTanques()
     {
         $cacheKey = __METHOD__;

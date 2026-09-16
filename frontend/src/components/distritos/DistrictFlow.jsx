@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState, useRef, useImperativeHandle } from 'react';
 import { format as formatDateFn } from 'date-fns';
-import ReactFlow, { addEdge, Background, MarkerType, Handle, Position, applyNodeChanges, applyEdgeChanges } from 'reactflow';
+import ReactFlow, { addEdge, Background, MarkerType, Handle, Position, BaseEdge, useStore, applyNodeChanges, applyEdgeChanges } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
 import TankNode from './TankNode';
@@ -985,6 +985,355 @@ function getLayoutedElements(nodes, edges, direction = 'LR') {
   return { nodes: layoutedNodes, edges: layoutedEdges };
 }
 
+const AUTO_PORT_COUNT = 8;
+const AUTO_PORT_FRACTIONS = Array.from({ length: AUTO_PORT_COUNT }, (_, index) =>
+  0.14 + ((0.72 * index) / Math.max(1, AUTO_PORT_COUNT - 1))
+);
+
+const AUTO_HANDLE_STYLE = {
+  width: 3,
+  height: 3,
+  opacity: 0,
+  background: 'transparent',
+  border: 'none',
+  boxShadow: 'none',
+  pointerEvents: 'none',
+  zIndex: 0,
+};
+
+function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68 }) {
+  const width = Math.max(1, Number(right) - Number(left));
+  const height = Math.max(1, Number(bottom) - Number(top));
+  return (
+    <>
+      {AUTO_PORT_FRACTIONS.map((fraction, index) => {
+        const y = Number(top) + (height * fraction);
+        const x = Number(left) + (width * fraction);
+        return (
+          <React.Fragment key={index}>
+            <Handle type="source" position={Position.Left} id={`s-left-${index}`} style={{ ...AUTO_HANDLE_STYLE, left, top: y }} />
+            <Handle type="target" position={Position.Left} id={`t-left-${index}`} style={{ ...AUTO_HANDLE_STYLE, left, top: y }} />
+            <Handle type="source" position={Position.Right} id={`s-right-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: right, top: y }} />
+            <Handle type="target" position={Position.Right} id={`t-right-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: right, top: y }} />
+            <Handle type="source" position={Position.Top} id={`s-top-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top }} />
+            <Handle type="target" position={Position.Top} id={`t-top-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top }} />
+            <Handle type="source" position={Position.Bottom} id={`s-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
+            <Handle type="target" position={Position.Bottom} id={`t-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function getRoutingNodeSize(node = {}) {
+  const data = node?.data?.nodeData || node?.data || {};
+  const type = String(node?.type || data?.type || 'shape').toLowerCase();
+  const width = Number(node?.width ?? data?.width);
+  const height = Number(node?.height ?? data?.height);
+  return {
+    width: Number.isFinite(width) && width > 0 ? width : (type === 'tank' ? 160 : type === 'plant' ? 200 : type === 'district' ? 160 : 120),
+    height: Number.isFinite(height) && height > 0 ? height : (type === 'tank' ? 200 : type === 'plant' ? 80 : type === 'district' ? 48 : 68),
+  };
+}
+
+function getRoutingNodeBox(node = {}) {
+  const size = getRoutingNodeSize(node);
+  const position = node?.positionAbsolute || node?.internals?.positionAbsolute || node?.position || { x: 0, y: 0 };
+  const x = Number(position?.x || 0);
+  const y = Number(position?.y || 0);
+  return {
+    id: String(node?.id || ''),
+    x,
+    y,
+    width: size.width,
+    height: size.height,
+    left: x,
+    right: x + size.width,
+    top: y,
+    bottom: y + size.height,
+    cx: x + (size.width / 2),
+    cy: y + (size.height / 2),
+    shapeType: String(node?.data?.nodeData?.shapeType || node?.data?.shapeType || '').toLowerCase(),
+  };
+}
+
+function getPreferredConnectionSides(sourceBox, targetBox) {
+  const dx = targetBox.cx - sourceBox.cx;
+  const dy = targetBox.cy - sourceBox.cy;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
+  }
+  return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
+}
+
+function getPortFractionForSide(box, side, otherBox) {
+  if (side === 'left' || side === 'right') {
+    return Math.max(0.14, Math.min(0.86, (otherBox.cy - box.top) / Math.max(1, box.height)));
+  }
+  return Math.max(0.14, Math.min(0.86, (otherBox.cx - box.left) / Math.max(1, box.width)));
+}
+
+function chooseAutoPortIndex({ nodeId, side, otherBox, nodeBox, edges = [], source = true }) {
+  const prefix = source ? 's' : 't';
+  const desired = getPortFractionForSide(nodeBox, side, otherBox);
+  let bestIndex = 0;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < AUTO_PORT_COUNT; index += 1) {
+    const handleId = `${prefix}-${side}-${index}`;
+    const occupancy = edges.reduce((count, edge) => {
+      if (source) return count + ((String(edge?.source || '') === String(nodeId) && edge?.sourceHandle === handleId) ? 1 : 0);
+      return count + ((String(edge?.target || '') === String(nodeId) && edge?.targetHandle === handleId) ? 1 : 0);
+    }, 0);
+    const score = (occupancy * 100) + Math.abs(AUTO_PORT_FRACTIONS[index] - desired);
+    if (score < bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
+}
+
+function assignAutoConnectionHandles(sourceId, targetId, nodes = [], edges = []) {
+  const sourceNode = nodes.find((node) => String(node?.id) === String(sourceId));
+  const targetNode = nodes.find((node) => String(node?.id) === String(targetId));
+  if (!sourceNode || !targetNode) {
+    return { sourceHandle: 's-right-3', targetHandle: 't-left-3' };
+  }
+
+  const sourceBox = getRoutingNodeBox(sourceNode);
+  const targetBox = getRoutingNodeBox(targetNode);
+  const [sourceSide, targetSide] = getPreferredConnectionSides(sourceBox, targetBox);
+  const sourceIndex = chooseAutoPortIndex({ nodeId: sourceId, side: sourceSide, otherBox: targetBox, nodeBox: sourceBox, edges, source: true });
+  const targetIndex = chooseAutoPortIndex({ nodeId: targetId, side: targetSide, otherBox: sourceBox, nodeBox: targetBox, edges, source: false });
+
+  return {
+    sourceHandle: `s-${sourceSide}-${sourceIndex}`,
+    targetHandle: `t-${targetSide}-${targetIndex}`,
+  };
+}
+
+function rebalanceSmartConnectionPorts(nodes = [], edges = []) {
+  const routed = [];
+  for (const edge of (edges || [])) {
+    const handles = assignAutoConnectionHandles(edge.source, edge.target, nodes, routed);
+    const routeMode = edge?.data?.routeMode === 'manual' ? 'manual' : 'smart';
+    routed.push({
+      ...edge,
+      ...handles,
+      type: routeMode === 'manual' ? (edge.type || 'step') : 'smart',
+      data: { ...(edge.data || {}), routeMode, autoPorts: true },
+    });
+  }
+  return routed;
+}
+
+function getPositionVector(position, fallbackX = 1, fallbackY = 0) {
+  if (position === Position.Left) return { x: -1, y: 0 };
+  if (position === Position.Right) return { x: 1, y: 0 };
+  if (position === Position.Top) return { x: 0, y: -1 };
+  if (position === Position.Bottom) return { x: 0, y: 1 };
+  if (Math.abs(fallbackX) >= Math.abs(fallbackY)) return { x: fallbackX >= 0 ? 1 : -1, y: 0 };
+  return { x: 0, y: fallbackY >= 0 ? 1 : -1 };
+}
+
+function compactOrthogonalPoints(points = []) {
+  const clean = [];
+  for (const point of points) {
+    if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) continue;
+    const p = { x: Number(point.x), y: Number(point.y) };
+    const previous = clean[clean.length - 1];
+    if (previous && previous.x === p.x && previous.y === p.y) continue;
+    clean.push(p);
+  }
+  let changed = true;
+  while (changed && clean.length > 2) {
+    changed = false;
+    for (let i = 1; i < clean.length - 1; i += 1) {
+      const a = clean[i - 1];
+      const b = clean[i];
+      const d = clean[i + 1];
+      if ((a.x === b.x && b.x === d.x) || (a.y === b.y && b.y === d.y)) {
+        clean.splice(i, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return clean;
+}
+
+function segmentHitsRect(a, b, rect) {
+  const pad = 12;
+  const left = rect.left - pad;
+  const right = rect.right + pad;
+  const top = rect.top - pad;
+  const bottom = rect.bottom + pad;
+  if (a.x === b.x) {
+    return a.x > left && a.x < right && Math.max(a.y, b.y) > top && Math.min(a.y, b.y) < bottom;
+  }
+  if (a.y === b.y) {
+    return a.y > top && a.y < bottom && Math.max(a.x, b.x) > left && Math.min(a.x, b.x) < right;
+  }
+  return false;
+}
+
+function scoreOrthogonalRoute(points, obstacles) {
+  let collisions = 0;
+  let length = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    length += Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+    for (const rect of obstacles) {
+      if (segmentHitsRect(a, b, rect)) collisions += 1;
+    }
+  }
+  return (collisions * 100000) + length + (Math.max(0, points.length - 2) * 8);
+}
+
+function buildRoundedOrthogonalPath(points = [], radius = 7) {
+  const p = compactOrthogonalPoints(points);
+  if (!p.length) return '';
+  if (p.length === 1) return `M ${p[0].x} ${p[0].y}`;
+
+  let path = `M ${p[0].x} ${p[0].y}`;
+  for (let i = 1; i < p.length - 1; i += 1) {
+    const previous = p[i - 1];
+    const current = p[i];
+    const next = p[i + 1];
+    const incoming = Math.abs(current.x - previous.x) + Math.abs(current.y - previous.y);
+    const outgoing = Math.abs(next.x - current.x) + Math.abs(next.y - current.y);
+    const r = Math.min(radius, incoming / 2, outgoing / 2);
+    const before = {
+      x: current.x + (previous.x === current.x ? 0 : (previous.x < current.x ? -r : r)),
+      y: current.y + (previous.y === current.y ? 0 : (previous.y < current.y ? -r : r)),
+    };
+    const after = {
+      x: current.x + (next.x === current.x ? 0 : (next.x < current.x ? -r : r)),
+      y: current.y + (next.y === current.y ? 0 : (next.y < current.y ? -r : r)),
+    };
+    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+  }
+  const last = p[p.length - 1];
+  path += ` L ${last.x} ${last.y}`;
+  return path;
+}
+
+function SmartDistrictEdge(props) {
+  const nodeInternals = useStore((state) => state.nodeInternals);
+  const storeEdges = useStore((state) => state.edges);
+
+  const {
+    id, source, target, sourceX, sourceY, targetX, targetY,
+    sourcePosition, targetPosition, markerEnd, style, selected,
+  } = props;
+
+  const internals = Array.from(nodeInternals?.values?.() || []);
+  const allObstacleRects = internals
+    .filter((node) => String(node?.id) !== String(source) && String(node?.id) !== String(target))
+    .map(getRoutingNodeBox)
+    .filter((box) => box.shapeType !== 'line');
+
+  const siblings = (storeEdges || [])
+    .filter((edge) => String(edge?.source) === String(source))
+    .slice()
+    .sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
+  const siblingIndex = Math.max(0, siblings.findIndex((edge) => String(edge?.id) === String(id)));
+  const laneOffset = (siblingIndex - ((Math.max(1, siblings.length) - 1) / 2)) * 9;
+
+  const sx = Number(sourceX);
+  const sy = Number(sourceY);
+  const tx = Number(targetX);
+  const ty = Number(targetY);
+
+  // Solo considerar obstáculos cercanos al trayecto origen-destino. Así una
+  // planta lejana no obliga a una conexión a rodear todo el diagrama.
+  const corridorMargin = 150;
+  const corridorLeft = Math.min(sx, tx) - corridorMargin;
+  const corridorRight = Math.max(sx, tx) + corridorMargin;
+  const corridorTop = Math.min(sy, ty) - corridorMargin;
+  const corridorBottom = Math.max(sy, ty) + corridorMargin;
+  const obstacleRects = allObstacleRects.filter((rect) =>
+    rect.right >= corridorLeft &&
+    rect.left <= corridorRight &&
+    rect.bottom >= corridorTop &&
+    rect.top <= corridorBottom
+  );
+
+  const sourceVector = getPositionVector(sourcePosition, tx - sx, ty - sy);
+  const targetVector = getPositionVector(targetPosition, sx - tx, sy - ty);
+  const stubDistance = 24 + Math.min(22, Math.abs(laneOffset));
+  const sourceStub = { x: sx + (sourceVector.x * stubDistance), y: sy + (sourceVector.y * stubDistance) };
+  const targetStub = { x: tx + (targetVector.x * stubDistance), y: ty + (targetVector.y * stubDistance) };
+
+  const allRects = obstacleRects.length ? obstacleRects : [{ left: Math.min(sx, tx), right: Math.max(sx, tx), top: Math.min(sy, ty), bottom: Math.max(sy, ty) }];
+  const minLeft = Math.min(sx, tx, ...allRects.map((r) => r.left));
+  const maxRight = Math.max(sx, tx, ...allRects.map((r) => r.right));
+  const minTop = Math.min(sy, ty, ...allRects.map((r) => r.top));
+  const maxBottom = Math.max(sy, ty, ...allRects.map((r) => r.bottom));
+  const midX = ((sourceStub.x + targetStub.x) / 2) + laneOffset;
+  const midY = ((sourceStub.y + targetStub.y) / 2) + laneOffset;
+  const outerGap = 30 + Math.abs(laneOffset);
+
+  const candidates = [
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: midX, y: sourceStub.y },
+      { x: midX, y: targetStub.y },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: sourceStub.x, y: midY },
+      { x: targetStub.x, y: midY },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: sourceStub.x, y: minTop - outerGap },
+      { x: targetStub.x, y: minTop - outerGap },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: sourceStub.x, y: maxBottom + outerGap },
+      { x: targetStub.x, y: maxBottom + outerGap },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: minLeft - outerGap, y: sourceStub.y },
+      { x: minLeft - outerGap, y: targetStub.y },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: maxRight + outerGap, y: sourceStub.y },
+      { x: maxRight + outerGap, y: targetStub.y },
+      targetStub, { x: tx, y: ty },
+    ],
+  ].map(compactOrthogonalPoints);
+
+  const best = candidates
+    .map((points) => ({ points, score: scoreOrthogonalRoute(points, obstacleRects) }))
+    .sort((a, b) => a.score - b.score)[0]?.points || candidates[0];
+
+  const path = buildRoundedOrthogonalPath(best);
+  const visibleStyle = {
+    ...(style || {}),
+    fill: 'none',
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    ...(selected ? { filter: 'drop-shadow(0 0 2px rgba(37,99,235,0.55))' } : {}),
+  };
+
+  return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={visibleStyle} />;
+}
+
+const EDGE_TYPES = { smart: SmartDistrictEdge };
+
 // Wrapper node components for React Flow
 function FlowTankNode(props) {
   const { data } = props || {};
@@ -1054,10 +1403,10 @@ function FlowTankNode(props) {
   };
 
   const handleStyle = {
-    width: 10, height: 10, background: '#2563eb',
-    border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-    borderRadius: '50%', zIndex: 10,
-    opacity: editMode ? 1 : 0, pointerEvents: editMode ? 'auto' : 'none',
+    width: 3, height: 3, background: 'transparent',
+    border: 'none', boxShadow: 'none',
+    borderRadius: '50%', zIndex: 0,
+    opacity: 0, pointerEvents: 'none',
   };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
@@ -1099,6 +1448,12 @@ function FlowTankNode(props) {
       <Handle type="source" position={Position.Right} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
       <Handle type="source" position={Position.Left} id="s-bottom-left" style={{ ...handleStyle, left: bottomLeftHandle.left, top: bottomLeftHandle.top }} />
       <Handle type="target" position={Position.Right} id="t-bottom-right" style={{ ...handleStyle, left: bottomRightHandle.left, top: bottomRightHandle.top }} />
+      <AutoInvisibleHandles
+        left={innerOffsetX + 20 * tankScale}
+        right={innerOffsetX + 100 * tankScale}
+        top={innerOffsetY + 36 * tankScale}
+        bottom={innerOffsetY + 126 * tankScale}
+      />
 
       <div style={{ width: tankWidth, height: tankHeight, overflow: 'visible' }}>
         <svg width={tankWidth} height={tankHeight}>
@@ -1255,13 +1610,15 @@ function FlowPlantNode(props) {
   };
 
   const handleStyle = {
-    width: 10,
-    height: 10,
-    background: customColor || '#073B70',
-    border: '2px solid #ffffff',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+    width: 3,
+    height: 3,
+    background: 'transparent',
+    border: 'none',
+    boxShadow: 'none',
     borderRadius: '50%',
-    zIndex: 10,
+    zIndex: 0,
+    opacity: 0,
+    pointerEvents: 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -1284,13 +1641,7 @@ function FlowPlantNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
-
-      {Boolean(nodeData && FLOW_METRIC_CONFIG[String(nodeData.id)]) && (
-        <>
-          <div style={{ position: 'absolute', left: -6, top: 28, width: 8, height: 8, borderRadius: '50%', background: '#fff', border: `2px solid ${customColor || '#073B70'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-          <div style={{ position: 'absolute', right: -6, top: 28, width: 8, height: 8, borderRadius: '50%', background: '#fff', border: `2px solid ${customColor || '#073B70'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-        </>
-      )}
+      <AutoInvisibleHandles left={6} right={w - 6} top={14} bottom={h - 14} />
 
       <div style={{ width: 200, height: 80, overflow: 'visible' }}>
         <svg width={200} height={80}>
@@ -1441,13 +1792,15 @@ function FlowDistrictNode(props) {
   };
 
   const handleStyle = {
-    width: 10,
-    height: 10,
-    background: customColor || '#475569',
-    border: '2px solid #ffffff',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+    width: 3,
+    height: 3,
+    background: 'transparent',
+    border: 'none',
+    boxShadow: 'none',
     borderRadius: '50%',
-    zIndex: 10,
+    zIndex: 0,
+    opacity: 0,
+    pointerEvents: 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -1470,6 +1823,7 @@ function FlowDistrictNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+      <AutoInvisibleHandles left={6} right={w - 6} top={4} bottom={h - 4} />
 
       <div style={{ width: 160, height: 48, overflow: 'visible' }}>
         <svg width={160} height={48}>
@@ -1619,7 +1973,7 @@ function FlowShapeNode(props) {
   };
 
   const isPending = Boolean(data && data.pendingConnect);
-  const handleStyle = { width: 10, height: 10, background: safeColor, border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', borderRadius: '50%', zIndex: 10, opacity: editMode ? 1 : 0, pointerEvents: editMode ? 'auto' : 'none' };
+  const handleStyle = { width: 3, height: 3, background: 'transparent', border: 'none', boxShadow: 'none', borderRadius: '50%', zIndex: 0, opacity: 0, pointerEvents: 'none' };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
   const renderShape = () => {
@@ -1679,6 +2033,7 @@ function FlowShapeNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
       <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={handleStyle} />
+      <AutoInvisibleHandles left={2} right={width - 2} top={2} bottom={height - 2} />
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
         <g transform={`translate(${width / 2}, ${height / 2}) rotate(${Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0}) translate(${-width / 2}, ${-height / 2})`}>
           {renderShape()}
@@ -3331,17 +3686,19 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     const duplicateIndex = nextEdges.findIndex((edge) => edge.source === sourceId && edge.target === targetId);
     if (duplicateIndex >= 0) return;
 
+    const handles = assignAutoConnectionHandles(sourceId, targetId, nodesRef.current || [], nextEdges);
+    const requestedType = defaultEdgeType || 'smart';
+    const smartRoute = requestedType === 'smart';
     const nextEdge = {
       id: `${sourceId}-${targetId}`,
       source: sourceId,
       target: targetId,
-      // include specific handle attachments if previously chosen
-      ...(connectPendingHandleRef.current && connectPendingHandleRef.current.source === sourceId && connectPendingHandleRef.current.sourceHandle ? { sourceHandle: connectPendingHandleRef.current.sourceHandle } : {}),
-      ...(connectPendingHandleRef.current && connectPendingHandleRef.current.target === targetId && connectPendingHandleRef.current.targetHandle ? { targetHandle: connectPendingHandleRef.current.targetHandle } : {}),
+      ...handles,
       markerEnd: { type: MarkerType.ArrowClosed, color: '#000', width: 10, height: 10 },
-      type: defaultEdgeType || 'step',
+      type: smartRoute ? 'smart' : requestedType,
       animated: false,
-      style: { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round' },
+      data: { routeMode: smartRoute ? 'smart' : 'manual', autoPorts: true },
+      style: { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round', strokeLinejoin: 'round' },
     };
 
     if (connectDate) {
@@ -3350,29 +3707,23 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     }
 
     const created = addEdge(nextEdge, nextEdges);
-    setEdges(created);
-    edgesRef.current = created;
-    persistConnection(created);
+    const balanced = rebalanceSmartConnectionPorts(nodesRef.current || [], created);
+    setEdges(balanced);
+    edgesRef.current = balanced;
+    persistConnection(balanced);
   }, [connectDate, connectDateFormat, persistConnection, defaultEdgeType]);
 
-  const beginConnectSelection = useCallback((nodeId, pos) => {
+  const beginConnectSelection = useCallback((nodeId) => {
     if (!nodeId) return;
     if (!editMode || mode !== 'connect') return;
 
+    // Conexión por selección: no hay puntos visibles ni hace falta acertar a un
+    // handle. El primer clic define origen y el segundo destino. Los puertos se
+    // eligen automáticamente según geometría y ocupación.
     if (!connectPendingId) {
       setConnectPendingId(nodeId);
       setSelectedNodeId(nodeId);
-      // choose a source handle based on click position
-      try {
-        const node = (nodesRef.current || []).find(n => n.id === nodeId) || {};
-        const w = Number.isFinite(Number(node.width)) ? Number(node.width) : (node.data && node.data.nodeData && node.data.nodeData.width) || 120;
-        const h = Number.isFinite(Number(node.height)) ? Number(node.height) : (node.data && node.data.nodeData && node.data.nodeData.height) || 68;
-        const x = pos && pos.offsetX != null ? pos.offsetX : w / 2;
-        const y = pos && pos.offsetY != null ? pos.offsetY : h / 2;
-        // choose nearest handle more precisely
-        const handle = getNearestHandle({ offsetX: x, offsetY: y, width: w, height: h }, true);
-        connectPendingHandleRef.current = { source: nodeId, sourceHandle: handle };
-      } catch (e) { connectPendingHandleRef.current = null; }
+      connectPendingHandleRef.current = null;
       return;
     }
 
@@ -3383,26 +3734,14 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       return;
     }
 
-    // choose target handle based on click position
-    try {
-      const node = (nodesRef.current || []).find(n => n.id === nodeId) || {};
-      const w = Number.isFinite(Number(node.width)) ? Number(node.width) : (node.data && node.data.nodeData && node.data.nodeData.width) || 120;
-      const h = Number.isFinite(Number(node.height)) ? Number(node.height) : (node.data && node.data.nodeData && node.data.nodeData.height) || 68;
-      const x = pos && pos.offsetX != null ? pos.offsetX : w / 2;
-      const y = pos && pos.offsetY != null ? pos.offsetY : h / 2;
-      const handle = getNearestHandle({ offsetX: x, offsetY: y, width: w, height: h }, false);
-      // attach target info in the pending ref
-      connectPendingHandleRef.current = { ...(connectPendingHandleRef.current || {}), target: nodeId, targetHandle: handle };
-    } catch (e) {}
-
     upsertOrToggleConnection(connectPendingId, nodeId);
     setConnectPendingId(null);
     setSelectedNodeId(nodeId);
     connectPendingHandleRef.current = null;
   }, [connectPendingId, editMode, mode, upsertOrToggleConnection]);
 
-  const handleConnectSelection = useCallback((nodeId, pos) => {
-    beginConnectSelection(nodeId, pos);
+  const handleConnectSelection = useCallback((nodeId) => {
+    beginConnectSelection(nodeId);
   }, [beginConnectSelection]);
 
   const deleteSelectedNode = useCallback((overriddenId = selectedNodeId) => {
@@ -3554,15 +3893,16 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         updated.push({ id, type: r.type || 'tank', position, customName: r.customName || '', nameLocked: !!r.nameLocked, label: r.label || id, data: { ...r, customName: r.customName || '', label: r.label || id, nodeData } });
       }
 
-      const normalizedEdges = (remoteEdges || [])
+      const normalizedEdges = rebalanceSmartConnectionPorts(updated, (remoteEdges || [])
         .filter((edge) => !removedIds.has(String(edge && edge.source)) && !removedIds.has(String(edge && edge.target)))
         .filter(isValidSavedEdge)
         .map((edge) => normalizeSavedEdge(edge, {
           animated: !!showFlow,
-          type: 'step',
+          type: 'smart',
           markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
-        })).filter((edge) => edge && edge.source && edge.target);
+          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round', strokeLinejoin: 'round' },
+        }))
+        .filter((edge) => edge && edge.source && edge.target));
 
       // Update in-memory and UI state.
       // Remote state is applied only as a view update; it must not trigger a save loop.
@@ -4452,14 +4792,21 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       if (node && node.id) {
         draftPositionsRef.current.set(node.id, sanitizePosition(node.position || {}));
       }
+
+      // Al terminar de mover un elemento, recalcular automáticamente de qué
+      // lado salen/entran las conexiones para conservar rutas limpias.
+      const rebalancedEdges = rebalanceSmartConnectionPorts(normalized, edgesRef.current || []);
+      edgesRef.current = rebalancedEdges;
+
       // Reflect exact runtime snapshot into React state
       setNodes([...normalized]);
+      setEdges([...rebalancedEdges]);
 
       // Persist using the exact snapshot; skip reading baseline to avoid overwriting
       if (!applyingRemoteRef.current) {
         const opId = `drag:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
         try { console.debug('[DIAG] onNodeDragStop', opId, 'node=', node && node.id, 'rfNodes=', (rfInstance && rfInstance.getNodes) ? (rfInstance.getNodes()||[]).find(n=>n.id===node.id) : null); } catch (e) {}
-        persistDistrictState(normalized, edgesRef.current, { skipReadBaseline: true, _diagOpId: opId });
+        persistDistrictState(normalized, rebalancedEdges, { skipReadBaseline: true, _diagOpId: opId });
       }
       try { setOverlayVisible(true); } catch (e) {}
     } catch (e) {}
@@ -4589,9 +4936,9 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         .filter(isValidSavedEdge)
         .map((edge) => normalizeSavedEdge(edge, {
           animated: !!showFlow,
-          type: 'step',
+          type: 'smart',
           markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round', strokeLinejoin: 'round' },
         }))
         .filter((edge) => edge && edge.source && edge.target);
 
@@ -4643,14 +4990,15 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           return !removedIds.has(String(entry.id));
         });
 
+        const routedInitialEdges = rebalanceSmartConnectionPorts(savedNodes, initialEdges);
         nodesRef.current = savedNodes;
-        edgesRef.current = initialEdges;
+        edgesRef.current = routedInitialEdges;
         setNodes(savedNodes);
-        setEdges(initialEdges);
+        setEdges(routedInitialEdges);
         try {
           const initialDesign = buildDesignHistorySnapshot({
             nodes: Object.fromEntries((savedNodes || []).map((n) => [n.id, getPersistedNodeEntry(n, (saved && saved.nodes && saved.nodes[n.id]) || {})])),
-            edges: initialEdges,
+            edges: routedInitialEdges,
           });
           savedPastRef.current = [initialDesign];
           savedFutureRef.current = [];
@@ -5017,7 +5365,16 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     updateEdgeType: (edgeId, type) => {
       if (!edgeId || !type) return;
       try {
-        const updated = (edgesRef.current || []).map(e => e.id === edgeId ? ({ ...e, type }) : e);
+        let updated = (edgesRef.current || []).map((edge) => {
+          if (edge.id !== edgeId) return edge;
+          const smart = type === 'smart';
+          return {
+            ...edge,
+            type,
+            data: { ...(edge.data || {}), routeMode: smart ? 'smart' : 'manual', autoPorts: true },
+          };
+        });
+        if (type === 'smart') updated = rebalanceSmartConnectionPorts(nodesRef.current || [], updated);
         setEdges(updated);
         edgesRef.current = updated;
         try { persistDistrictState(nodesRef.current, updated); } catch (e2) {}
@@ -5213,11 +5570,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           setSelectedEdgeId(edge.id);
           if (onEdgeSelect) onEdgeSelect(edge.id);
         }}
-        onNodeMouseDown={(_, node) => {
-          if (editMode && mode === 'connect') {
-            return;
-          }
-        }}
         onPaneClick={(event) => {
           const target = event?.target;
           const clickedInsideNode = !!(target && typeof target.closest === 'function' && (
@@ -5235,7 +5587,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         }}
         onEdgesDelete={onEdgesDelete}
         nodeTypes={NODE_TYPES}
-        updateNodeDimensions={false}
+        edgeTypes={EDGE_TYPES}
         attributionPosition="bottom-left"
         onInit={(inst) => { setRfInstance(inst); }}
         onMoveEnd={(_, viewport) => {
@@ -5252,8 +5604,8 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         snapToGrid={false}
         nodesDraggable={diagramMode === 'edit'}
         elementsSelectable={true}
-        nodesConnectable={editMode && (diagramMode === 'edit' || editMode)}
-        connectOnClick={editMode && (diagramMode === 'edit' || editMode)}
+        nodesConnectable={false}
+        connectOnClick={false}
         connectionMode="loose"
       >
         <Background gap={16} />

@@ -330,14 +330,12 @@ export default function DistrictMap() {
   const tankPickerOpen = useMemo(() => Boolean(false), []);
   const [tankButtonOpen, setTankButtonOpen] = useState(false);
   const selectedShapeNode = useMemo(() => {
-    // Use the live node from the selection callback as the primary source
-    const activeNode = selectedFlowNode || flowRef.current?.getSelectedNode?.() || (selectedId ? flowRef.current?.getNodeById?.(selectedId) : null) || null;
-    if (!activeNode) return null;
-
-    const isShapeNode = activeNode.type === 'shape' || activeNode.data?.type === 'shape' || activeNode.data?.nodeData?.type === 'shape';
-    const hasShapeType = Boolean(activeNode.data?.shapeType || activeNode.data?.nodeData?.shapeType || activeNode.shapeType);
-
-    return isShapeNode && hasShapeType ? activeNode : null;
+    // "Cambiar figura" puede convertir cualquier elemento seleccionado a una
+    // forma visual, no solamente nodos que ya nacieron como type="shape".
+    return selectedFlowNode
+      || flowRef.current?.getSelectedNode?.()
+      || (selectedId ? flowRef.current?.getNodeById?.(selectedId) : null)
+      || null;
   }, [selectedId, selectedFlowNode]);
   const isShapeChangeEnabled = Boolean(selectedShapeNode);
   const isTankAlreadyPresent = (tank) => {
@@ -625,8 +623,14 @@ export default function DistrictMap() {
                 color="secondary"
                 disabled={!isShapeChangeEnabled}
                 onClick={() => {
-                  const activeNode = flowRef.current?.getSelectedNode?.() || null;
-                  if (!activeNode || activeNode.type !== 'shape') return;
+                  const activeNode = flowRef.current?.getSelectedNode?.()
+                    || selectedFlowNode
+                    || (selectedId ? flowRef.current?.getNodeById?.(selectedId) : null)
+                    || null;
+                  if (!activeNode) {
+                    setSnack({ open: true, msg: 'Selecciona un elemento para cambiar su figura' });
+                    return;
+                  }
                   setShowChangeShapePicker(v => !v);
                 }}
               >

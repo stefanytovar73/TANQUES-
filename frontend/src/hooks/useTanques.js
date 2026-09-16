@@ -16,9 +16,9 @@ export default function useTanques() {
             setTanques(data.tanques || []);
             setError(null);
         } catch (err) {
-            // On any error from IBAL/backend do not preserve previous data.
-            // Clear `tanques` so UI does not display stale data as current.
-            setTanques([]);
+            // Si ya mostramos el último payload conocido, conservarlo mientras
+            // se recupera la conexión. Así una recarga no deja Distritos vacío.
+            setTanques((prev) => (Array.isArray(prev) && prev.length ? prev : []));
             setError(err);
         } finally {
             if (showLoading) setLoading(false);

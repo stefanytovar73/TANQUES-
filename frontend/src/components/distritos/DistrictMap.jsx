@@ -663,7 +663,12 @@ export default function DistrictMap() {
                 onClick={() => {
                   flowRef.current?.editUnlockAllNodes?.();
                   setDiagramMode('edit');
-                  try { localStorage.setItem('district_diagram_mode', 'edit'); } catch (e) {}
+                  setDiagramLocked(false);
+                  try {
+                    localStorage.setItem('district_diagram_mode', 'edit');
+                    localStorage.setItem('district_locked', '0');
+                  } catch (e) {}
+                  setSnack({ open: true, msg: 'Mover activado: elementos desbloqueados' });
                 }}
                 sx={{ fontWeight: 700, minWidth: 80 }}
               >
@@ -680,7 +685,14 @@ export default function DistrictMap() {
                 onClick={() => {
                   flowRef.current?.saveAndLockAllNodes?.();
                   flowRef.current?.doSave?.();
-                  setSnack({ open: true, msg: '✓ Diagrama guardado' });
+                  setDiagramMode('view');
+                  setDiagramLocked(true);
+                  try {
+                    localStorage.setItem('district_diagram_mode', 'view');
+                    localStorage.setItem('district_locked', '1');
+                  } catch (e) {}
+                  setUnsavedChanges(false);
+                  setSnack({ open: true, msg: '✓ Diagrama guardado y posiciones bloqueadas' });
                 }}
                 sx={{ fontWeight: 700, minWidth: 90 }}
               >

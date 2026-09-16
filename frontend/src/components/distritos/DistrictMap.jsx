@@ -260,7 +260,11 @@ export default function DistrictMap() {
     // user actively selected a node -> clear any prior manual dismissal
     setDetailsDismissedId(null);
     setSelectedId(resolvedId);
-    setSelectedEdgeId(null);
+    // Solo borrar la conexión seleccionada cuando realmente se selecciona un nodo.
+    // React Flow puede emitir una selección de nodos vacía justo después de hacer
+    // clic en una arista; antes eso borraba selectedEdgeId y el selector Línea
+    // terminaba cambiando el valor por defecto en vez de la conexión seleccionada.
+    if (resolvedId) setSelectedEdgeId(null);
 
     // Always keep the live flow node reference in sync for shape detection
     const liveNode = node || flowRef.current?.getNodeById?.(resolvedId) || flowRef.current?.getSelectedNode?.() || pickNodeById(resolvedId) || null;
@@ -931,7 +935,18 @@ export default function DistrictMap() {
               Cargando tanques, Mackenfloc y caudales…
             </Box>
           ) : (
-            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />
+            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onEdgeSelect={(id, edge) => {
+              setSelectedEdgeId(id || null);
+              if (!id) return;
+              const selectedEdge = edge || flowRef.current?.getEdgeById?.(id) || null;
+              if (!selectedEdge) return;
+              const nextType = selectedEdge.type || 'smart';
+              const nextWidth = Number(selectedEdge.style?.strokeWidth || 3);
+              const nextColor = selectedEdge.style?.stroke || selectedEdge.markerEnd?.color || '#000000';
+              setEdgeLineType(nextType);
+              setConnectionStrokeWidth(nextWidth);
+              setConnectionStrokeColor(nextColor);
+            }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />
           )}
           {tooltip ? (
             <Box sx={{ position: 'absolute', pointerEvents: 'none', left: tooltip.x - (containerRef.current?.getBoundingClientRect().left || 0) + 8, top: tooltip.y - (containerRef.current?.getBoundingClientRect().top || 0) + 8, background: 'white', p: 1, borderRadius: 1, boxShadow: 2, fontSize: 12 }}>

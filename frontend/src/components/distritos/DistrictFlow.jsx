@@ -459,7 +459,6 @@ function _formatMetric(variable) {
 }
 
 function getCachedPtapMetricMap() {
-  if (_ptapMetricsMap && Object.keys(_ptapMetricsMap).length) return _ptapMetricsMap;
   try {
     const cached = tanqueService.peekPtap?.();
     const map = {};
@@ -471,7 +470,8 @@ function getCachedPtapMetricMap() {
       return map;
     }
   } catch (e) {}
-  return {};
+
+  return (_ptapMetricsMap && Object.keys(_ptapMetricsMap).length) ? _ptapMetricsMap : {};
 }
 
 function getBaseNodeName(node) {
@@ -1232,6 +1232,8 @@ function FlowPlantNode(props) {
   const labelText = getNodeDisplayName({ data: nodeData });
   const metricNodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
   const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId));
+  const currentCachedMetricLabel = getCachedFlowMetricForNodeId(metricNodeId);
+  const effectiveMetricLabel = currentCachedMetricLabel != null ? currentCachedMetricLabel : metricLabel;
   const beginEdit = (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -1377,7 +1379,7 @@ function FlowPlantNode(props) {
               </foreignObject>
             ) : (
               <>
-                {metricLabel ? (
+                {effectiveMetricLabel ? (
                   <div style={{
                     position: 'absolute',
                     left: '50%',
@@ -1394,7 +1396,7 @@ function FlowPlantNode(props) {
                     color: '#0b2447',
                     zIndex: 20,
                   }}>
-                    {metricLabel}
+                    {effectiveMetricLabel}
                   </div>
                 ) : null}
                 <rect x={-90} y={-22} width={180} height={44} rx={22} ry={22} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}22` : '#e6f2ff')} stroke={isPending ? '#ef4444' : (customColor || '#073B70')} strokeWidth={isPending || data?.selected ? 3 : 2} />
@@ -1765,7 +1767,7 @@ function formatDateLabel(isoDate, fmt = 'dd/MM/yyyy') {
   } catch (e) { return isoDate || ''; }
 }
 
-const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, initialEdges, onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
+const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, initialEdges, onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, telemetryVersion = 0, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
 
   // Note: avoid updateNodeDimensions to prevent React Flow from hiding nodes while measuring
   try { console.debug('[DISTRICT DEBUG] DistrictFlow init props initialNodes.length:', (initialNodes || []).length, 'initialEdges.length:', (initialEdges || []).length); } catch (e) {}
@@ -4628,6 +4630,18 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     loadInitialDiagramState();
     return () => { cancelled = true; };
   }, [readAuthoritativeDiagramState, showFlow]);
+
+  // Cada vez que el bundle completo (tanques + PTAP + captación) cambia,
+  // aplicar el snapshot entero en una sola actualización visual.
+  useEffect(() => {
+    if (!telemetryVersion || !(nodesRef.current || []).length) return;
+    try {
+      const updated = hydrateInitialTankTelemetry(nodesRef.current || []);
+      nodesRef.current = updated;
+      getCachedPtapMetricMap();
+      setNodes([...updated]);
+    } catch (e) {}
+  }, [telemetryVersion]);
 
   // Actualización periódica de métricas: solo actualizar datos de API, NUNCA las posiciones
   useEffect(() => {

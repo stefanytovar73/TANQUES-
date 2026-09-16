@@ -1388,10 +1388,10 @@ function FlowTankNode(props) {
   };
 
   const handleStyle = {
-    width: 10, height: 10, background: '#2563eb',
-    border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-    borderRadius: '50%', zIndex: 10,
-    opacity: editMode ? 1 : 0, pointerEvents: editMode ? 'auto' : 'none',
+    width: 3, height: 3, background: 'transparent',
+    border: 'none', boxShadow: 'none',
+    borderRadius: '50%', zIndex: 0,
+    opacity: 0, pointerEvents: 'none',
   };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
@@ -1433,6 +1433,12 @@ function FlowTankNode(props) {
       <Handle type="source" position={Position.Right} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
       <Handle type="source" position={Position.Left} id="s-bottom-left" style={{ ...handleStyle, left: bottomLeftHandle.left, top: bottomLeftHandle.top }} />
       <Handle type="target" position={Position.Right} id="t-bottom-right" style={{ ...handleStyle, left: bottomRightHandle.left, top: bottomRightHandle.top }} />
+      <AutoInvisibleHandles
+        left={innerOffsetX + 20 * tankScale}
+        right={innerOffsetX + 100 * tankScale}
+        top={innerOffsetY + 36 * tankScale}
+        bottom={innerOffsetY + 126 * tankScale}
+      />
 
       <div style={{ width: tankWidth, height: tankHeight, overflow: 'visible' }}>
         <svg width={tankWidth} height={tankHeight}>
@@ -1589,13 +1595,15 @@ function FlowPlantNode(props) {
   };
 
   const handleStyle = {
-    width: 10,
-    height: 10,
-    background: customColor || '#073B70',
-    border: '2px solid #ffffff',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+    width: 3,
+    height: 3,
+    background: 'transparent',
+    border: 'none',
+    boxShadow: 'none',
     borderRadius: '50%',
-    zIndex: 10,
+    zIndex: 0,
+    opacity: 0,
+    pointerEvents: 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -1618,13 +1626,7 @@ function FlowPlantNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
-
-      {Boolean(nodeData && FLOW_METRIC_CONFIG[String(nodeData.id)]) && (
-        <>
-          <div style={{ position: 'absolute', left: -6, top: 28, width: 8, height: 8, borderRadius: '50%', background: '#fff', border: `2px solid ${customColor || '#073B70'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-          <div style={{ position: 'absolute', right: -6, top: 28, width: 8, height: 8, borderRadius: '50%', background: '#fff', border: `2px solid ${customColor || '#073B70'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-        </>
-      )}
+      <AutoInvisibleHandles left={6} right={w - 6} top={14} bottom={h - 14} />
 
       <div style={{ width: 200, height: 80, overflow: 'visible' }}>
         <svg width={200} height={80}>
@@ -1775,13 +1777,15 @@ function FlowDistrictNode(props) {
   };
 
   const handleStyle = {
-    width: 10,
-    height: 10,
-    background: customColor || '#475569',
-    border: '2px solid #ffffff',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+    width: 3,
+    height: 3,
+    background: 'transparent',
+    border: 'none',
+    boxShadow: 'none',
     borderRadius: '50%',
-    zIndex: 10,
+    zIndex: 0,
+    opacity: 0,
+    pointerEvents: 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -1804,6 +1808,7 @@ function FlowDistrictNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+      <AutoInvisibleHandles left={6} right={w - 6} top={4} bottom={h - 4} />
 
       <div style={{ width: 160, height: 48, overflow: 'visible' }}>
         <svg width={160} height={48}>
@@ -1953,7 +1958,7 @@ function FlowShapeNode(props) {
   };
 
   const isPending = Boolean(data && data.pendingConnect);
-  const handleStyle = { width: 10, height: 10, background: safeColor, border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', borderRadius: '50%', zIndex: 10, opacity: editMode ? 1 : 0, pointerEvents: editMode ? 'auto' : 'none' };
+  const handleStyle = { width: 3, height: 3, background: 'transparent', border: 'none', boxShadow: 'none', borderRadius: '50%', zIndex: 0, opacity: 0, pointerEvents: 'none' };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
   const renderShape = () => {
@@ -2013,6 +2018,7 @@ function FlowShapeNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
       <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={handleStyle} />
+      <AutoInvisibleHandles left={2} right={width - 2} top={2} bottom={height - 2} />
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
         <g transform={`translate(${width / 2}, ${height / 2}) rotate(${Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0}) translate(${-width / 2}, ${-height / 2})`}>
           {renderShape()}

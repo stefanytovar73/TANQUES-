@@ -2637,8 +2637,21 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const doSave = useCallback(() => {
     try {
       const savedState = readDiagramState();
-      // Capture exact runtime positions from React Flow when available
-      const runtimeNodes = (rfInstance && typeof rfInstance.getNodes === 'function') ? rfInstance.getNodes() : (nodesRef.current || []);
+      // ReactFlow tiene la posición visual más reciente, mientras nodesRef mantiene
+      // metadatos que acabamos de cambiar (por ejemplo lockedPosition). Combinar
+      // ambos evita que Guardar pierda el bloqueo por un render todavía pendiente.
+      const visualNodes = (rfInstance && typeof rfInstance.getNodes === 'function') ? rfInstance.getNodes() : (nodesRef.current || []);
+      const latestById = new Map((nodesRef.current || []).map((n) => [n.id, n]));
+      const runtimeNodes = (visualNodes || []).map((visualNode) => {
+        const latest = latestById.get(visualNode.id);
+        if (!latest) return visualNode;
+        return {
+          ...visualNode,
+          ...latest,
+          position: visualNode.position || latest.position,
+          data: latest.data || visualNode.data,
+        };
+      });
       const saved = {
         ...savedState,
         nodes: Object.fromEntries((runtimeNodes || []).map(n => {

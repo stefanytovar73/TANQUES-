@@ -639,13 +639,13 @@ export default function DistrictMap() {
               {showChangeShapePicker && (
                 <div style={{ position: 'absolute', top: '110%', left: 0, zIndex: 200, background: '#fff', border: '1px solid #cbd5e1', borderRadius: 8, padding: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, minWidth: 180 }}>
                   {SHAPE_MENU_OPTIONS.map(s => (
-                    <button key={s.type} title={s.label} onClick={() => {
+                    <button key={s.type} title={s.label} onClick={async () => {
                       setDeleteMode(false);
                       const activeId = flowRef.current?.getSelectedNodeId?.() || selectedId || null;
                       if (!activeId) return;
-                      const changed = flowRef.current?.changeSelectedNodeShape?.(activeId, s.type);
                       setShowChangeShapePicker(false);
-                      if (changed) setSnack({ open: true, msg: 'Figura cambiada y guardada' });
+                      const changed = await flowRef.current?.changeSelectedNodeShape?.(activeId, s.type);
+                      if (!changed) setSnack({ open: true, msg: 'No se pudo guardar el cambio de figura' });
                     }} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, padding: 6, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, transition: 'background 0.15s' }} onMouseEnter={e => e.currentTarget.style.background = '#dbeafe'} onMouseLeave={e => e.currentTarget.style.background = '#f8fafc'}>
                       <svg width="24" height="24" viewBox="0 0 24 24">{s.svg}</svg>
                       <span style={{ fontSize: 9, color: '#475569', fontWeight: 600, textAlign: 'center', lineHeight: 1.1 }}>{s.label}</span>
@@ -782,9 +782,15 @@ export default function DistrictMap() {
                 variant={diagramMode === 'edit' ? 'contained' : 'outlined'}
                 color="success"
                 onClick={() => {
-                  flowRef.current?.editUnlockAllNodes?.();
+                  setDiagramLocked(false);
+                  setEditTool('select');
+                  setDeleteMode(false);
                   setDiagramMode('edit');
-                  try { localStorage.setItem('district_diagram_mode', 'edit'); } catch (e) {}
+                  try {
+                    localStorage.setItem('district_diagram_mode', 'edit');
+                    localStorage.setItem('district_locked', '0');
+                  } catch (e) {}
+                  flowRef.current?.editUnlockAllNodes?.();
                 }}
                 sx={{ fontWeight: 700, minWidth: 80 }}
               >
@@ -802,12 +808,6 @@ export default function DistrictMap() {
                   try {
                     const flow = flowRef.current;
                     window.__diagTrace = Array.isArray(window.__diagTrace) ? window.__diagTrace : [];
-                    window.__diagTrace.push('GLOBAL_SAVE_CLICK');
-                    window.__diagTrace.push(`FLOW_REF_EXISTS=${Boolean(flow)}`);
-                    window.__diagTrace.push(`DO_SAVE_FUNCTION_EXISTS=${typeof flow?.doSaveToServer === 'function'}`);
-                    console.info('[DIAGRAM TRACE] GLOBAL_SAVE_CLICK');
-                    console.info('[DIAGRAM TRACE] FLOW_REF_EXISTS', Boolean(flow));
-                    console.info('[DIAGRAM TRACE] DO_SAVE_FUNCTION_EXISTS', typeof flow?.doSaveToServer === 'function');
                     // The explicit server-save action is the single authoritative path for
                     // the user-triggered Save button. Avoid calling the lock+reload helper
                     // here because it performs its own save/reload cycle and can race with

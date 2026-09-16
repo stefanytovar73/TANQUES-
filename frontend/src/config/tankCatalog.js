@@ -281,7 +281,12 @@ const sanitizeTankForDisplay = (tank) => {
     const sanitized = { ...tank };
     // Preservar los valores raw de la API antes de limpiar campos calculados previos.
     // porcentaje_capacidad es el campo real que devuelve IBAL; NO borrarlo si no hay porcentaje ya computado.
-    const rawPorcentajeCapacidad = Number.isFinite(Number(sanitized.porcentaje_capacidad)) ? Number(sanitized.porcentaje_capacidad) : null;
+    const rawPorcentajeCapacidad = (
+        sanitized.porcentaje_capacidad !== null &&
+        sanitized.porcentaje_capacidad !== undefined &&
+        sanitized.porcentaje_capacidad !== '' &&
+        Number.isFinite(Number(sanitized.porcentaje_capacidad))
+    ) ? Number(sanitized.porcentaje_capacidad) : null;
     delete sanitized.porcentaje;
     delete sanitized.porcentaje_api;
     delete sanitized.porcentaje_capacidad_api;
@@ -289,6 +294,25 @@ const sanitizeTankForDisplay = (tank) => {
     // Restaurar porcentaje_capacidad si existía, para que mergeTankWithCatalog lo pueda leer
     if (rawPorcentajeCapacidad != null) sanitized.porcentaje_capacidad = rawPorcentajeCapacidad;
     return sanitized;
+};
+
+const OFFICIAL_FALLBACK_HEIGHT_BY_TAG = {
+    NIVEL_CALUCAIMA: 6,
+    NIVEL_MIRAMAR: 6,
+    NIVEL_DE_ZONA_INDUSTRIAL: 6,
+};
+
+const getOfficialFallbackHeight = (tank = {}) => {
+    const tag = String(tank.tag || tank.apiTag || '').trim().toUpperCase();
+    if (tag && Object.prototype.hasOwnProperty.call(OFFICIAL_FALLBACK_HEIGHT_BY_TAG, tag)) {
+        return OFFICIAL_FALLBACK_HEIGHT_BY_TAG[tag];
+    }
+
+    const name = normalizeText(tank.display_name || tank.nombre || tank.name || '');
+    if (name === 'calucaima' || name === 'miramar' || name === 'zona industrial' || name === 'de zona industrial') {
+        return 6;
+    }
+    return null;
 };
 
 const mergeTankWithCatalog = (tank, catalog) => {
@@ -321,14 +345,17 @@ const mergeTankWithCatalog = (tank, catalog) => {
     //  3. API altura_rebose_m             ← raw del sensor (útil solo cuando no hay catálogo)
     //  4. API altura_rebose               ← último recurso
     // Prefer catalog calibrated height when available (identity-stable mapping ensured above)
-    const rawAltura = (config?.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada)))
-        ? Number(config.altura_rebose_calibrada)
-        : ((config?.altura_rebose != null && Number.isFinite(Number(config.altura_rebose)))
-            ? Number(config.altura_rebose)
-            : ((sourceTank.altura_rebose_m !== null && sourceTank.altura_rebose_m !== undefined && sourceTank.altura_rebose_m !== '') && Number.isFinite(Number(sourceTank.altura_rebose_m))
-                ? Number(sourceTank.altura_rebose_m)
-                : ((sourceTank.altura_rebose !== null && sourceTank.altura_rebose !== undefined && sourceTank.altura_rebose !== '') && Number.isFinite(Number(sourceTank.altura_rebose))
-                    ? Number(sourceTank.altura_rebose) : null)));
+    const officialFallbackHeight = getOfficialFallbackHeight(sourceTank);
+    const rawAltura = (officialFallbackHeight != null && Number.isFinite(Number(officialFallbackHeight)))
+        ? Number(officialFallbackHeight)
+        : ((config?.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada)))
+            ? Number(config.altura_rebose_calibrada)
+            : ((config?.altura_rebose != null && Number.isFinite(Number(config.altura_rebose)))
+                ? Number(config.altura_rebose)
+                : ((sourceTank.altura_rebose_m !== null && sourceTank.altura_rebose_m !== undefined && sourceTank.altura_rebose_m !== '') && Number.isFinite(Number(sourceTank.altura_rebose_m))
+                    ? Number(sourceTank.altura_rebose_m)
+                    : ((sourceTank.altura_rebose !== null && sourceTank.altura_rebose !== undefined && sourceTank.altura_rebose !== '') && Number.isFinite(Number(sourceTank.altura_rebose))
+                        ? Number(sourceTank.altura_rebose) : null))));
 
     const isBadQuality = sourceTank.calidad === 'DUDOSA' || sourceTank.sin_datos === true;
 
@@ -352,7 +379,11 @@ const mergeTankWithCatalog = (tank, catalog) => {
     if (hasExplicitPercentage) {
         computedPorcentaje = Number(apiPorcentaje);
     } else if (catalogHasCalibratedHeight && !isBadQuality && nivelActual != null && rawAltura != null && rawAltura > 0) {
-        const alturaUsar = (config && config.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada))) ? Number(config.altura_rebose_calibrada) : rawAltura;
+        const alturaUsar = (officialFallbackHeight != null && Number.isFinite(Number(officialFallbackHeight)))
+            ? Number(officialFallbackHeight)
+            : ((config && config.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada)))
+                ? Number(config.altura_rebose_calibrada)
+                : rawAltura);
         const raw = calculateDisplayPorcentaje(nivelActual, alturaUsar);
         computedPorcentaje = (raw == null) ? null : Math.round(raw);
     } else if (!isBadQuality && nivelActual != null && rawAltura != null && rawAltura > 0) {

@@ -1093,9 +1093,20 @@ const AUTO_HANDLE_STYLE = {
   zIndex: 0,
 };
 
-function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68 }) {
+function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68, active = false }) {
   const width = Math.max(1, Number(right) - Number(left));
   const height = Math.max(1, Number(bottom) - Number(top));
+  const visibleSourceStyle = active ? {
+    width: 8,
+    height: 8,
+    opacity: 1,
+    background: '#2563eb',
+    border: '2px solid #fff',
+    boxShadow: '0 1px 3px rgba(0,0,0,.25)',
+    pointerEvents: 'auto',
+    zIndex: 18,
+  } : AUTO_HANDLE_STYLE;
+
   return (
     <>
       {AUTO_PORT_FRACTIONS.map((fraction, index) => {
@@ -1103,13 +1114,15 @@ function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68 }) {
         const x = Number(left) + (width * fraction);
         return (
           <React.Fragment key={index}>
-            <Handle type="source" position={Position.Left} id={`s-left-${index}`} style={{ ...AUTO_HANDLE_STYLE, left, top: y }} />
+            {/* En modo loose, los source handles pueden ser origen o destino.
+                Los target históricos se conservan invisibles para no romper edges guardados. */}
+            <Handle type="source" position={Position.Left} id={`s-left-${index}`} style={{ ...visibleSourceStyle, left, top: y }} />
             <Handle type="target" position={Position.Left} id={`t-left-${index}`} style={{ ...AUTO_HANDLE_STYLE, left, top: y }} />
-            <Handle type="source" position={Position.Right} id={`s-right-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: right, top: y }} />
+            <Handle type="source" position={Position.Right} id={`s-right-${index}`} style={{ ...visibleSourceStyle, left: right, top: y }} />
             <Handle type="target" position={Position.Right} id={`t-right-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: right, top: y }} />
-            <Handle type="source" position={Position.Top} id={`s-top-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top }} />
+            <Handle type="source" position={Position.Top} id={`s-top-${index}`} style={{ ...visibleSourceStyle, left: x, top }} />
             <Handle type="target" position={Position.Top} id={`t-top-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top }} />
-            <Handle type="source" position={Position.Bottom} id={`s-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
+            <Handle type="source" position={Position.Bottom} id={`s-bottom-${index}`} style={{ ...visibleSourceStyle, left: x, top: bottom }} />
             <Handle type="target" position={Position.Bottom} id={`t-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
           </React.Fragment>
         );
@@ -1535,6 +1548,10 @@ function SmartDistrictEdge(props) {
   } = props;
 
   const internals = Array.from(nodeInternals?.values?.() || []);
+  const sourceInternal = internals.find((node) => String(node?.id) === String(source)) || null;
+  const targetInternal = internals.find((node) => String(node?.id) === String(target)) || null;
+  const sourceBox = sourceInternal ? getRoutingNodeBox(sourceInternal) : null;
+  const targetBox = targetInternal ? getRoutingNodeBox(targetInternal) : null;
   const allObstacleRects = internals
     .filter((node) => String(node?.id) !== String(source) && String(node?.id) !== String(target))
     .map(getRoutingNodeBox)
@@ -1547,10 +1564,34 @@ function SmartDistrictEdge(props) {
   const siblingIndex = Math.max(0, siblings.findIndex((edge) => String(edge?.id) === String(id)));
   const laneOffset = (siblingIndex - ((Math.max(1, siblings.length) - 1) / 2)) * 9;
 
-  const sx = Number(sourceX);
-  const sy = Number(sourceY);
-  const tx = Number(targetX);
-  const ty = Number(targetY);
+  const rawSx = Number(sourceX);
+  const rawSy = Number(sourceY);
+  const rawTx = Number(targetX);
+  const rawTy = Number(targetY);
+
+  const projectToBoundary = (x, y, box, position) => {
+    if (!box) return { x, y };
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    if (position === Position.Left) return { x: box.left, y: clamp(y, box.top, box.bottom) };
+    if (position === Position.Right) return { x: box.right, y: clamp(y, box.top, box.bottom) };
+    if (position === Position.Top) return { x: clamp(x, box.left, box.right), y: box.top };
+    if (position === Position.Bottom) return { x: clamp(x, box.left, box.right), y: box.bottom };
+
+    const distances = [
+      { d: Math.abs(x - box.left), p: { x: box.left, y: clamp(y, box.top, box.bottom) } },
+      { d: Math.abs(x - box.right), p: { x: box.right, y: clamp(y, box.top, box.bottom) } },
+      { d: Math.abs(y - box.top), p: { x: clamp(x, box.left, box.right), y: box.top } },
+      { d: Math.abs(y - box.bottom), p: { x: clamp(x, box.left, box.right), y: box.bottom } },
+    ].sort((a, b) => a.d - b.d);
+    return distances[0].p;
+  };
+
+  const sourceBoundary = projectToBoundary(rawSx, rawSy, sourceBox, sourcePosition);
+  const targetBoundary = projectToBoundary(rawTx, rawTy, targetBox, targetPosition);
+  const sx = sourceBoundary.x;
+  const sy = sourceBoundary.y;
+  const tx = targetBoundary.x;
+  const ty = targetBoundary.y;
 
   const sourceVector = getPositionVector(sourcePosition, tx - sx, ty - sy);
   const targetVector = getPositionVector(targetPosition, sx - tx, sy - ty);
@@ -1705,7 +1746,7 @@ function FlowTankNode(props) {
   const bottomRightHandle = rotatePoint(innerOffsetX + 92 * tankScale, innerOffsetY + 114 * tankScale, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} title="Doble clic para abrir detalle del tanque" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
       {/* Handles — solo visibles en editMode */}
       <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
@@ -1722,6 +1763,7 @@ function FlowTankNode(props) {
         right={innerOffsetX + 100 * tankScale}
         top={innerOffsetY + 36 * tankScale}
         bottom={innerOffsetY + 126 * tankScale}
+        active={editMode && mode === 'connect'}
       />
 
       <div style={{ width: tankWidth, height: tankHeight, overflow: 'visible' }}>
@@ -1829,6 +1871,10 @@ function FlowPlantNode(props) {
   const labelText = getNodeDisplayName({ data: nodeData });
   const metricNodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
   const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {}));
+  const isCayMetricNode = String(metricNodeId || '').trim() === 'ptap-chembe' || normalizeMetricLabelKey(labelText) === 'CAY';
+  const displayedMetricLabel = (metricLabel !== null && metricLabel !== undefined && metricLabel !== '')
+    ? metricLabel
+    : (isCayMetricNode ? '0 L/s' : null);
   const beginEdit = (ev) => {
     if (mode === 'connect' || deleteMode) return;
     ev.preventDefault();
@@ -1901,7 +1947,7 @@ function FlowPlantNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
-      <AutoInvisibleHandles left={6} right={w - 6} top={14} bottom={h - 14} />
+      <AutoInvisibleHandles left={6} right={w - 6} top={14} bottom={h - 14} active={editMode && mode === 'connect'} />
 
       <div style={{ width: 200, height: 80, overflow: 'visible' }}>
         <svg width={200} height={80}>
@@ -1971,7 +2017,7 @@ function FlowPlantNode(props) {
               </foreignObject>
             ) : (
               <>
-                {metricLabel ? (
+                {displayedMetricLabel ? (
                   <div style={{
                     position: 'absolute',
                     left: '50%',
@@ -1988,7 +2034,7 @@ function FlowPlantNode(props) {
                     color: '#0b2447',
                     zIndex: 20,
                   }}>
-                    {metricLabel}
+                    {displayedMetricLabel}
                   </div>
                 ) : null}
                 <rect x={-90} y={-22} width={180} height={44} rx={22} ry={22} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}22` : '#e6f2ff')} stroke={isPending ? '#ef4444' : (customColor || '#073B70')} strokeWidth={isPending || data?.selected ? 3 : 2} />
@@ -2081,7 +2127,7 @@ function FlowDistrictNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
-      <AutoInvisibleHandles left={6} right={w - 6} top={4} bottom={h - 4} />
+      <AutoInvisibleHandles left={6} right={w - 6} top={4} bottom={h - 4} active={editMode && mode === 'connect'} />
 
       <div style={{ width: 160, height: 48, overflow: 'visible' }}>
         <svg width={160} height={48}>
@@ -2195,7 +2241,13 @@ function FlowShapeNode(props) {
   const isMackenflocShape = Boolean(_resolvedExactTag && String(_resolvedExactTag).toUpperCase().includes('MACKENFLOC'));
 
   // Respect zero as a valid API value while still suppressing null/undefined.
-  const effectiveMetricText = (metricText !== null && metricText !== undefined && metricText !== '') ? String(metricText).trim() : null;
+  const shapeMetricName = normalizeMetricLabelKey(
+    runtimeNodeData?.customName || runtimeNodeData?.label || runtimeNodeData?.display_name || runtimeNodeData?.nombre || runtimeDisplayName || ''
+  );
+  const isCocoraMetricNode = String(runtimeNodeData?.id || '').trim() === 'forma-1788988205128-xhpu4' || shapeMetricName === 'COCORA';
+  const effectiveMetricText = (metricText !== null && metricText !== undefined && metricText !== '')
+    ? String(metricText).trim()
+    : (isCocoraMetricNode ? '0 L/s' : null);
   const shouldRenderMetricBadge = !isMackenflocShape && effectiveMetricText !== null;
   const shouldRenderMackenflocInline = isMackenflocShape && effectiveMetricText !== null;
 
@@ -2278,7 +2330,7 @@ function FlowShapeNode(props) {
       <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
       <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
       <Handle type="source" position={Position.Bottom} id="s-bottom" style={handleStyle} />
-      <AutoInvisibleHandles left={2} right={width - 2} top={2} bottom={height - 2} />
+      <AutoInvisibleHandles left={2} right={width - 2} top={2} bottom={height - 2} active={editMode && mode === 'connect'} />
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
         <g transform={`translate(${width / 2}, ${height / 2}) rotate(${Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0}) translate(${-width / 2}, ${-height / 2})`}>
           {renderShape()}
@@ -2345,7 +2397,7 @@ function formatDateLabel(isoDate, fmt = 'dd/MM/yyyy') {
   } catch (e) { return isoDate || ''; }
 }
 
-const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, initialEdges, onNodeSelect, onEdgeSelect, onDeleteComplete, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
+const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, initialEdges, onNodeSelect, onEdgeSelect, onDeleteComplete, onTankDoubleClick, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
 
   // Note: avoid updateNodeDimensions to prevent React Flow from hiding nodes while measuring
   try { console.debug('[DISTRICT DEBUG] DistrictFlow init props initialNodes.length:', (initialNodes || []).length, 'initialEdges.length:', (initialEdges || []).length); } catch (e) {}
@@ -5836,6 +5888,12 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           _setSelectedNodeId(nextId);
           if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: false });
         }}
+        onNodeDoubleClick={(event, node) => {
+          try { event?.preventDefault?.(); event?.stopPropagation?.(); } catch (e) {}
+          if (!node || node.type !== 'tank' || mode === 'connect' || deleteMode) return;
+          _setSelectedNodeId(node.id);
+          if (typeof onTankDoubleClick === 'function') onTankDoubleClick(node.id, node);
+        }}
         onSelectionChange={({ nodes: selectedNodes = [] }) => {
           const shouldSuppress = dragMovedRef.current || suppressClickAfterDragRef.current || suppressSelectionAfterDragRef.current || Date.now() < dragSuppressUntilRef.current;
           if (shouldSuppress) {
@@ -5914,6 +5972,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         elementsSelectable={true}
         nodesConnectable={editMode && mode === 'connect'}
         connectOnClick={editMode && mode === 'connect'}
+        isValidConnection={(connection) => Boolean(connection?.source && connection?.target && connection.source !== connection.target)}
         connectionMode="loose"
       >
         <Background gap={16} />

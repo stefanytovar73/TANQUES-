@@ -1117,13 +1117,16 @@ function assignAutoConnectionHandles(sourceId, targetId, nodes = [], edges = [])
 function rebalanceSmartConnectionPorts(nodes = [], edges = []) {
   const routed = [];
   for (const edge of (edges || [])) {
-    const handles = assignAutoConnectionHandles(edge.source, edge.target, nodes, routed);
+    const manualPorts = Boolean(edge?.data?.manualPorts);
+    const handles = manualPorts
+      ? { sourceHandle: edge.sourceHandle, targetHandle: edge.targetHandle }
+      : assignAutoConnectionHandles(edge.source, edge.target, nodes, routed);
     const routeMode = edge?.data?.routeMode === 'manual' ? 'manual' : 'smart';
     routed.push({
       ...edge,
       ...handles,
       type: routeMode === 'manual' ? (edge.type || 'step') : 'smart',
-      data: { ...(edge.data || {}), routeMode, autoPorts: true },
+      data: { ...(edge.data || {}), routeMode, autoPorts: !manualPorts, manualPorts },
     });
   }
   return routed;
@@ -1371,17 +1374,7 @@ function FlowTankNode(props) {
       if (onDuplicate) onDuplicate(nodeData.id);
       return;
     }
-    if (editMode && mode === 'connect') {
-      if (onConnectNode) {
-        try {
-          const rect = ev.currentTarget.getBoundingClientRect ? ev.currentTarget.getBoundingClientRect() : null;
-          const offsetX = rect ? (ev.clientX - rect.left) : (ev.nativeEvent && ev.nativeEvent.offsetX) || 0;
-          const offsetY = rect ? (ev.clientY - rect.top) : (ev.nativeEvent && ev.nativeEvent.offsetY) || 0;
-          onConnectNode(nodeData.id, { offsetX, offsetY });
-        } catch (e) { onConnectNode(nodeData.id, null); }
-      }
-      return;
-    }
+    if (editMode && mode === 'connect') return;
     if (onSelect) onSelect(nodeData.id);
   };
   // Diagnostic: mark when node wrapper's onSelect is invoked
@@ -1403,10 +1396,11 @@ function FlowTankNode(props) {
   };
 
   const handleStyle = {
-    width: 3, height: 3, background: 'transparent',
-    border: 'none', boxShadow: 'none',
-    borderRadius: '50%', zIndex: 0,
-    opacity: 0, pointerEvents: 'none',
+    width: 10, height: 10, background: '#2563eb',
+    border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+    borderRadius: '50%', zIndex: 10,
+    opacity: editMode && mode === 'connect' ? 1 : 0,
+    pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none',
   };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
@@ -1552,17 +1546,7 @@ function FlowPlantNode(props) {
       if (onDuplicate) onDuplicate(nodeData.id);
       return;
     }
-    if (editMode && mode === 'connect') {
-      if (onConnectNode) {
-        try {
-          const rect = ev.currentTarget.getBoundingClientRect ? ev.currentTarget.getBoundingClientRect() : null;
-          const offsetX = rect ? (ev.clientX - rect.left) : (ev.nativeEvent && ev.nativeEvent.offsetX) || 0;
-          const offsetY = rect ? (ev.clientY - rect.top) : (ev.nativeEvent && ev.nativeEvent.offsetY) || 0;
-          onConnectNode(nodeData.id, { offsetX, offsetY });
-        } catch (e) { onConnectNode(nodeData.id, null); }
-      }
-      return;
-    }
+    if (editMode && mode === 'connect') return;
     try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('FLOWPLANTNODE_HANDLECLICK:' + (nodeData && nodeData.id)); } } catch (e) {}
     if (onSelect) onSelect(nodeData.id);
   };
@@ -1610,15 +1594,15 @@ function FlowPlantNode(props) {
   };
 
   const handleStyle = {
-    width: 3,
-    height: 3,
-    background: 'transparent',
-    border: 'none',
-    boxShadow: 'none',
+    width: 10,
+    height: 10,
+    background: customColor || '#073B70',
+    border: '2px solid #ffffff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
     borderRadius: '50%',
-    zIndex: 0,
-    opacity: 0,
-    pointerEvents: 'none',
+    zIndex: 10,
+    opacity: editMode && mode === 'connect' ? 1 : 0,
+    pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -1765,10 +1749,7 @@ function FlowDistrictNode(props) {
       if (onDuplicate) onDuplicate(nodeData.id);
       return;
     }
-    if (editMode && mode === 'connect') {
-      if (onConnectNode) onConnectNode(nodeData.id);
-      return;
-    }
+    if (editMode && mode === 'connect') return;
     try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('FLOWDISTRICTNODE_HANDLECLICK:' + (nodeData && nodeData.id)); } } catch (e) {}
     if (onSelect) onSelect(nodeData.id);
   };
@@ -1792,15 +1773,15 @@ function FlowDistrictNode(props) {
   };
 
   const handleStyle = {
-    width: 3,
-    height: 3,
-    background: 'transparent',
-    border: 'none',
-    boxShadow: 'none',
+    width: 10,
+    height: 10,
+    background: customColor || '#475569',
+    border: '2px solid #ffffff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
     borderRadius: '50%',
-    zIndex: 0,
-    opacity: 0,
-    pointerEvents: 'none',
+    zIndex: 10,
+    opacity: editMode && mode === 'connect' ? 1 : 0,
+    pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none',
   };
 
   const rotation = Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0;
@@ -1946,20 +1927,7 @@ function FlowShapeNode(props) {
     if (isEditing) return;
     if (editMode && deleteMode) { if (onDeleteSelected) onDeleteSelected(nodeData.id); return; }
     if (editMode && mode === 'duplicate') { if (onDuplicate) onDuplicate(nodeData.id); return; }
-    if (editMode && mode === 'connect') {
-      if (onConnectNode) {
-        // compute click coordinates relative to node element
-        try {
-          const rect = ev.currentTarget.getBoundingClientRect ? ev.currentTarget.getBoundingClientRect() : null;
-          const offsetX = rect ? (ev.clientX - rect.left) : (ev.nativeEvent && ev.nativeEvent.offsetX) || 0;
-          const offsetY = rect ? (ev.clientY - rect.top) : (ev.nativeEvent && ev.nativeEvent.offsetY) || 0;
-          onConnectNode(nodeData.id, { offsetX, offsetY });
-        } catch (e) {
-          onConnectNode(nodeData.id, null);
-        }
-      }
-      return;
-    }
+    if (editMode && mode === 'connect') return;
     try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('FLOWSHAPENODE_HANDLECLICK:' + (nodeData && nodeData.id)); } } catch (e) {}
     if (onSelect) onSelect(nodeData.id);
   };
@@ -1973,7 +1941,7 @@ function FlowShapeNode(props) {
   };
 
   const isPending = Boolean(data && data.pendingConnect);
-  const handleStyle = { width: 3, height: 3, background: 'transparent', border: 'none', boxShadow: 'none', borderRadius: '50%', zIndex: 0, opacity: 0, pointerEvents: 'none' };
+  const handleStyle = { width: 10, height: 10, background: safeColor, border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', borderRadius: '50%', zIndex: 10, opacity: editMode && mode === 'connect' ? 1 : 0, pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none' };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
 
   const renderShape = () => {
@@ -4347,12 +4315,44 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
   const onConnect = useCallback((params) => {
     try {
-      // Keep transient connection edits out of the saved history stack.
       clearTransientHistory();
       if (!params || !params.source || !params.target || params.source === params.target) return;
-      upsertOrToggleConnection(params.source, params.target);
+
+      const current = [...(edgesRef.current || [])];
+      const exactDuplicate = current.some((edge) =>
+        String(edge.source) === String(params.source) &&
+        String(edge.target) === String(params.target) &&
+        String(edge.sourceHandle || '') === String(params.sourceHandle || '') &&
+        String(edge.targetHandle || '') === String(params.targetHandle || '')
+      );
+      if (exactDuplicate) return;
+
+      const requestedType = defaultEdgeType || 'smart';
+      const smartRoute = requestedType === 'smart';
+      const edge = {
+        id: `${params.source}-${params.target}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        source: params.source,
+        target: params.target,
+        sourceHandle: params.sourceHandle || undefined,
+        targetHandle: params.targetHandle || undefined,
+        type: smartRoute ? 'smart' : requestedType,
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#000', width: 10, height: 10 },
+        style: { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round', strokeLinejoin: 'round' },
+        data: { routeMode: smartRoute ? 'smart' : 'manual', manualPorts: true, autoPorts: false },
+      };
+
+      if (connectDate) {
+        edge.data = { ...(edge.data || {}), date: connectDate };
+        edge.label = formatDateLabel(connectDate, connectDateFormat || 'dd/MM/yyyy');
+      }
+
+      const next = addEdge(edge, current);
+      setEdges(next);
+      edgesRef.current = next;
+      persistConnection(next);
     } catch (e) {}
-  }, [clearTransientHistory, upsertOrToggleConnection]);
+  }, [clearTransientHistory, defaultEdgeType, connectDate, connectDateFormat, persistConnection]);
 
   const deleteSelectedConnection = useCallback((edgeId = selectedEdgeId) => {
     const targetId = edgeId || selectedEdgeId;
@@ -5512,10 +5512,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
             return;
           }
 
-          if (editMode && mode === 'connect') {
-            beginConnectSelection(node.id);
-            return;
-          }
+          if (editMode && mode === 'connect') return;
 
           if (editMode && mode === 'duplicate') {
             duplicateSelectedNode(node.id);
@@ -5608,8 +5605,8 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         snapToGrid={false}
         nodesDraggable={diagramMode === 'edit'}
         elementsSelectable={true}
-        nodesConnectable={false}
-        connectOnClick={false}
+        nodesConnectable={editMode && mode === 'connect'}
+        connectOnClick={editMode && mode === 'connect'}
         connectionMode="loose"
       >
         <Background gap={16} />

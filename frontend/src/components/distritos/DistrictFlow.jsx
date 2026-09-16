@@ -3671,17 +3671,17 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     const duplicateIndex = nextEdges.findIndex((edge) => edge.source === sourceId && edge.target === targetId);
     if (duplicateIndex >= 0) return;
 
+    const handles = assignAutoConnectionHandles(sourceId, targetId, nodesRef.current || [], nextEdges);
     const nextEdge = {
       id: `${sourceId}-${targetId}`,
       source: sourceId,
       target: targetId,
-      // include specific handle attachments if previously chosen
-      ...(connectPendingHandleRef.current && connectPendingHandleRef.current.source === sourceId && connectPendingHandleRef.current.sourceHandle ? { sourceHandle: connectPendingHandleRef.current.sourceHandle } : {}),
-      ...(connectPendingHandleRef.current && connectPendingHandleRef.current.target === targetId && connectPendingHandleRef.current.targetHandle ? { targetHandle: connectPendingHandleRef.current.targetHandle } : {}),
+      ...handles,
       markerEnd: { type: MarkerType.ArrowClosed, color: '#000', width: 10, height: 10 },
-      type: defaultEdgeType || 'step',
+      type: 'smart',
       animated: false,
-      style: { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round' },
+      data: { routeMode: 'smart', autoPorts: true },
+      style: { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round', strokeLinejoin: 'round' },
     };
 
     if (connectDate) {
@@ -3690,29 +3690,23 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     }
 
     const created = addEdge(nextEdge, nextEdges);
-    setEdges(created);
-    edgesRef.current = created;
-    persistConnection(created);
-  }, [connectDate, connectDateFormat, persistConnection, defaultEdgeType]);
+    const balanced = rebalanceSmartConnectionPorts(nodesRef.current || [], created);
+    setEdges(balanced);
+    edgesRef.current = balanced;
+    persistConnection(balanced);
+  }, [connectDate, connectDateFormat, persistConnection]);
 
-  const beginConnectSelection = useCallback((nodeId, pos) => {
+  const beginConnectSelection = useCallback((nodeId) => {
     if (!nodeId) return;
     if (!editMode || mode !== 'connect') return;
 
+    // Conexión por selección: no hay puntos visibles ni hace falta acertar a un
+    // handle. El primer clic define origen y el segundo destino. Los puertos se
+    // eligen automáticamente según geometría y ocupación.
     if (!connectPendingId) {
       setConnectPendingId(nodeId);
       setSelectedNodeId(nodeId);
-      // choose a source handle based on click position
-      try {
-        const node = (nodesRef.current || []).find(n => n.id === nodeId) || {};
-        const w = Number.isFinite(Number(node.width)) ? Number(node.width) : (node.data && node.data.nodeData && node.data.nodeData.width) || 120;
-        const h = Number.isFinite(Number(node.height)) ? Number(node.height) : (node.data && node.data.nodeData && node.data.nodeData.height) || 68;
-        const x = pos && pos.offsetX != null ? pos.offsetX : w / 2;
-        const y = pos && pos.offsetY != null ? pos.offsetY : h / 2;
-        // choose nearest handle more precisely
-        const handle = getNearestHandle({ offsetX: x, offsetY: y, width: w, height: h }, true);
-        connectPendingHandleRef.current = { source: nodeId, sourceHandle: handle };
-      } catch (e) { connectPendingHandleRef.current = null; }
+      connectPendingHandleRef.current = null;
       return;
     }
 
@@ -3723,26 +3717,14 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       return;
     }
 
-    // choose target handle based on click position
-    try {
-      const node = (nodesRef.current || []).find(n => n.id === nodeId) || {};
-      const w = Number.isFinite(Number(node.width)) ? Number(node.width) : (node.data && node.data.nodeData && node.data.nodeData.width) || 120;
-      const h = Number.isFinite(Number(node.height)) ? Number(node.height) : (node.data && node.data.nodeData && node.data.nodeData.height) || 68;
-      const x = pos && pos.offsetX != null ? pos.offsetX : w / 2;
-      const y = pos && pos.offsetY != null ? pos.offsetY : h / 2;
-      const handle = getNearestHandle({ offsetX: x, offsetY: y, width: w, height: h }, false);
-      // attach target info in the pending ref
-      connectPendingHandleRef.current = { ...(connectPendingHandleRef.current || {}), target: nodeId, targetHandle: handle };
-    } catch (e) {}
-
     upsertOrToggleConnection(connectPendingId, nodeId);
     setConnectPendingId(null);
     setSelectedNodeId(nodeId);
     connectPendingHandleRef.current = null;
   }, [connectPendingId, editMode, mode, upsertOrToggleConnection]);
 
-  const handleConnectSelection = useCallback((nodeId, pos) => {
-    beginConnectSelection(nodeId, pos);
+  const handleConnectSelection = useCallback((nodeId) => {
+    beginConnectSelection(nodeId);
   }, [beginConnectSelection]);
 
   const deleteSelectedNode = useCallback((overriddenId = selectedNodeId) => {

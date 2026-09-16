@@ -2330,10 +2330,36 @@ function FlowShapeNode(props) {
     setDraft(runtimeDisplayName);
   }, [runtimeDisplayName]);
 
-  const cachedMetricText = getCachedFlowMetricForNodeId(runtimeNodeData?.id ?? data?.id, runtimeNodeData || data || {});
+  const shapeMetricNodeId = runtimeNodeData?.id ?? data?.id;
+  const cachedMetricText = getCachedFlowMetricForNodeId(shapeMetricNodeId, runtimeNodeData || data || {});
+  const isCocoraNode = String(shapeMetricNodeId || '').trim() === 'forma-1788988205128-xhpu4';
+  const [cocoraMetricText, setCocoraMetricText] = useState(() => isCocoraNode ? cachedMetricText : null);
+
+  useEffect(() => {
+    if (!isCocoraNode) return undefined;
+    let mounted = true;
+    let timer = null;
+
+    const refresh = async () => {
+      try {
+        const latest = await loadFlowMetricForNodeId(shapeMetricNodeId, runtimeNodeData || data || {});
+        if (mounted) setCocoraMetricText(latest || '0 L/s');
+      } catch (e) {
+        if (mounted) setCocoraMetricText('0 L/s');
+      }
+    };
+
+    refresh();
+    timer = setInterval(refresh, 30000);
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [isCocoraNode, shapeMetricNodeId]);
+
   const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '')
     ? String(runtimeNodeData.ptapMetricText)
-    : cachedMetricText;
+    : (isCocoraNode ? (cocoraMetricText || '0 L/s') : cachedMetricText);
   const metricLabel = (runtimeNodeData && runtimeNodeData.ptapMetricLabel != null && runtimeNodeData.ptapMetricLabel !== '')
     ? String(runtimeNodeData.ptapMetricLabel)
     : null;

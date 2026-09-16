@@ -3013,14 +3013,15 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     const nextType = String(nextShapeType || '').trim();
     if (!idToUpdate || !nextType) return false;
 
-    const currentNode = (nodesRef.current || []).find((n) => n.id === idToUpdate) || null;
+    const currentNodes = Array.isArray(nodesRef.current) ? nodesRef.current : [];
+    const currentNode = currentNodes.find((n) => n.id === idToUpdate) || null;
     if (!currentNode) return false;
 
     const sourceData = (currentNode.data && currentNode.data.nodeData) || (currentNode.data || {});
     const currentShapeType = String(sourceData.shapeType || currentNode.shapeType || '').trim();
     if (currentNode.type === 'shape' && currentShapeType === nextType) return false;
 
-    const updated = (nodesRef.current || []).map((n) => {
+    const updated = currentNodes.map((n) => {
       if (n.id !== idToUpdate) return n;
       const previousData = (n.data && n.data.nodeData) || (n.data || {});
       const nextNodeData = {
@@ -3031,6 +3032,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         width: Number.isFinite(Number(previousData.width)) ? Number(previousData.width) : 120,
         height: Number.isFinite(Number(previousData.height)) ? Number(previousData.height) : 68,
       };
+
       return {
         ...n,
         type: 'shape',
@@ -3049,16 +3051,33 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     setNodes([...updated]);
 
     try {
-      await persistDistrictState(updated, edgesRef.current, {
-        force: true,
-        skipReadBaseline: true,
-        sendToServer: false,
-        _diagOpId: `shape:${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
-      });
+      const previousState = readDiagramState();
+      const payload = {
+        ...(previousState && typeof previousState === 'object' ? previousState : {}),
+        nodes: Object.fromEntries(updated.map((n) => {
+          const previous = previousState?.nodes?.[n.id] || {};
+          return [n.id, getPersistedNodeEntry(n, previous)];
+        })),
+        edges: Array.isArray(edgesRef.current) ? edgesRef.current : [],
+        updated_at: new Date().toISOString(),
+        _updatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
 
-      const payload = readDiagramState();
+      // Persist exact figure locally first. If an older autosave is still
+      // in flight, let it finish before sending this newer snapshot so it can
+      // never overwrite the selected figure afterwards.
+      writeDiagramState(payload, { source: 'local', sendToServer: false });
+      let waits = 0;
+      while (savingRef.current && waits < 80) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        waits += 1;
+      }
+      pendingServerSaveRef.current = null;
+
       const ok = await diagramService.saveState(payload);
       if (!ok) return false;
+      writeDiagramState(payload, { source: 'remote', sendToServer: false });
 
       window.location.reload();
       return true;
@@ -3066,7 +3085,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       console.warn('[DIAGRAM] cambio de figura no pudo guardarse', e);
       return false;
     }
-  }, [selectedNodeId, persistDistrictState, readDiagramState]);
+  }, [selectedNodeId, readDiagramState, getPersistedNodeEntry, writeDiagramState]);
 
   // Set a manual percentage for a single node. Persist minimal config only.
   const setNodeManualPercentage = useCallback((id, pct) => {
@@ -4310,10 +4329,9 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         }
       } catch (e) {}
 
-      // No recargar la página después de Guardar: el estado que ya ve el
-      // usuario es el snapshot recién confirmado por el backend.
-      setSaveMsg('ok');
-      setTimeout(() => setSaveMsg(null), 2500);
+      // Guardar = confirmar en backend y recargar inmediatamente.
+      // La recarga ocurre solo después del 200 para no perder cambios.
+      window.location.reload();
       return true;
     } catch (err) {
       try { setSaveMsg('error'); setTimeout(() => setSaveMsg(null), 3000); } catch (e) {}
@@ -4919,23 +4937,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [doUndo, doRedo]);
-
-  // focus on node when requested from parent
-  useEffect(() => {
-    if (!focusNodeId || !rfInstance) return;
-    const n = nodes.find(x => x.id === focusNodeId);
-    if (!n) return;
-    try {
-      const px = Number(n.position?.x ?? 0);
-      const py = Number(n.position?.y ?? 0);
-      const nd = n.data?.nodeData || n.data || {};
-      const w = Number(nd.width ?? n.width ?? 120) || 120;
-      const h = Number(nd.height ?? n.height ?? 80) || 80;
-      rfInstance.setCenter(px + (w / 2), py + (h / 2), { duration: 400 });
-    } catch (e) {
-      if (rfInstance && rfInstance.fitView) rfInstance.fitView({ padding: 0.12 });
-    }
-  }, [focusNodeId, rfInstance, nodes]);
 
   // expose imperative methods to parent via ref
   useImperativeHandle(ref, () => ({

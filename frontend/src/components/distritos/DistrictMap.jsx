@@ -500,9 +500,15 @@ export default function DistrictMap() {
                     // Admin unlock: allow editing only via admin action
                     const ok = window.confirm('Confirmar desbloqueo de diagrama como administrador. ¿Continuar?');
                     if (!ok) return;
-                    flowRef.current?.editUnlockAllNodes?.();
                     setDiagramLocked(false);
-                    try { localStorage.setItem('district_locked', '0'); } catch (e) {}
+                    setEditTool('select');
+                    setDeleteMode(false);
+                    setDiagramMode('edit');
+                    try {
+                      localStorage.setItem('district_locked', '0');
+                      localStorage.setItem('district_diagram_mode', 'edit');
+                    } catch (e) {}
+                    flowRef.current?.editUnlockAllNodes?.();
                     setSnack({ open: true, msg: 'Diagrama desbloqueado (admin)' });
                   } catch (e) { console.warn(e); }
                 }}>Desbloquear (admin)</Button>
@@ -530,7 +536,17 @@ export default function DistrictMap() {
               size="small"
               startIcon={<PanToolIcon />}
               variant={editTool === 'select' && !deleteMode ? 'contained' : 'outlined'}
-              onClick={() => { setEditTool('select'); setDeleteMode(false); }}
+              onClick={() => {
+                setEditTool('select');
+                setDeleteMode(false);
+                setDiagramLocked(false);
+                setDiagramMode('edit');
+                try {
+                  localStorage.setItem('district_diagram_mode', 'edit');
+                  localStorage.setItem('district_locked', '0');
+                } catch (e) {}
+                flowRef.current?.editUnlockAllNodes?.();
+              }}
             >
               Seleccionar / Mover
             </Button>

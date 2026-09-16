@@ -26,12 +26,21 @@ export default function useTanques() {
     };
 
     useEffect(() => {
+        // Arrancar tanques + captación + PTAP en paralelo desde el primer instante.
+        // getTanques reutiliza la misma promesa, así que no duplica la solicitud.
+        try { tanqueService.preloadDistrictData?.(false); } catch (e) {}
+
         // Si ya existe un payload reciente, pintar inmediatamente y refrescar en
         // segundo plano. En una entrada en frío seguimos mostrando el layout
         // estático mientras llega la API.
         cargarTanques(!initialCached, false);
-        // Sondeo cada 30 s con forceRefresh=true para bypassar el caché.
-        const intervalo = window.setInterval(() => cargarTanques(false, true), 30000);
+
+        // Refrescar las tres fuentes juntas cada 30 s. Los componentes de Distritos
+        // reutilizan el caché resultante al renderizar.
+        const intervalo = window.setInterval(() => {
+            try { tanqueService.preloadDistrictData?.(true); } catch (e) {}
+            cargarTanques(false, true);
+        }, 30000);
         return () => clearInterval(intervalo);
     }, []);
 

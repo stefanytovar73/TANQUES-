@@ -23,7 +23,7 @@ export default defineConfig({
   expect: { timeout: 5000 },
   use: {
     headless: true,
-    baseURL: process.env.PW_BASE_URL || 'http://localhost:5175',
+    baseURL: process.env.PW_BASE_URL || 'http://127.0.0.1:5173',
     viewport: { width: 1280, height: 900 },
     actionTimeout: 10000,
   },

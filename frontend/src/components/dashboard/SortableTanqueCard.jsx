@@ -7,7 +7,7 @@ import TanqueCard from "./TanqueCard";
  * Envuelve TanqueCard con soporte de drag & drop (dnd-kit).
  * Muestra un handle visual de 6 puntos en la esquina superior derecha.
  */
-function SortableTanqueCard({ id, tanque }) {
+function SortableTanqueCard({ id, tanque, onManualPctChange }) {
   const {
     attributes,
     listeners,
@@ -63,7 +63,7 @@ function SortableTanqueCard({ id, tanque }) {
         ))}
       </Box>
 
-      <TanqueCard tanque={tanque} />
+      <TanqueCard tanque={tanque} onManualPctChange={onManualPctChange} />
     </Box>
   );
 }

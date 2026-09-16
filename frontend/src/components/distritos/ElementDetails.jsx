@@ -1,12 +1,47 @@
-import React from 'react';
-import { Drawer, Box, Typography, Divider, Button } from '@mui/material';
+import React, { useEffect, useState } from 'react';
+import { Drawer, Box, Typography, Divider, Button, TextField } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-export default function ElementDetails({ open, onClose, node, onShowConnections, nodes = [], connections = [], onDelete }) {
+export default function ElementDetails({ open, onClose, node, onShowConnections, nodes = [], connections = [], onDelete, onRenameNode }) {
   const navigate = useNavigate();
+  const [draftName, setDraftName] = useState('');
+
+  const data = node?.data || {};
+  const nestedData = data.nodeData || {};
+  const metricSource = { ...data, ...nestedData };
+  const safeNode = node || {};
+  const derivedLabel = safeNode.label || data.label || nestedData.label || data.nodeData?.label || data.nodeData?.display_name || nestedData.display_name || data.display_name || nestedData.nombre || data.nombre || safeNode.customName || data.customName || nestedData.customName || node?.id || 'Sin nombre';
+  const effectiveName = nestedData.customName || data.customName || safeNode.customName || nestedData.display_name || data.display_name || nestedData.nombre || data.nombre || derivedLabel || 'Sin nombre';
+  const nivelValue = metricSource.valor_m ?? metricSource.nivel ?? metricSource.level ?? metricSource.level_m ?? null;
+  const porcentajeValue = metricSource.porcentaje ?? metricSource.porcentaje_capacidad ?? metricSource.porcentaje_api ?? metricSource.pct ?? null;
+  const capacidadActual = metricSource.capacidad_actual_m3 ?? metricSource.capacidad_actual ?? metricSource.capacidad_m3 ?? null;
+  const capacidadMaxima = metricSource.capacidad_maxima_m3 ?? metricSource.capacidad_maxima ?? null;
+
+  useEffect(() => {
+    if (!node?.id) {
+      setDraftName('');
+      return;
+    }
+
+    setDraftName((prev) => {
+      if (prev && prev.trim() && prev !== effectiveName && prev !== '') {
+        return prev;
+      }
+      return effectiveName || '';
+    });
+    try { console.info('[SELECTION TRACE] ELEMENT_DETAILS_NODE_ID=' + (node && node.id)); } catch (e) {}
+    try { console.info('[SELECTION TRACE] NAME_FIELD_RENDERED=' + true); } catch (e) {}
+    try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('ELEMENT_DETAILS_NODE_ID:' + (node && node.id)); window.__SELECTION_TRACE.push('NAME_FIELD_RENDERED:true'); } } catch (e) {}
+  }, [node?.id, effectiveName]);
+
   if (!node) return null;
 
-  const data = node.data || {};
-  const effectiveName = data.customName || node.customName || data.display_name || data.nombre || node.label || 'Sin nombre';
+  const handleRename = () => {
+    const nextValue = (draftName || '').replace(/\s+/g, ' ').trim();
+    if (typeof onRenameNode !== 'function') return;
+    const finalValue = nextValue || effectiveName || 'Sin nombre';
+    onRenameNode(finalValue);
+    setDraftName(finalValue);
+  };
 
   const onHistoricos = () => {
     navigate('/historicos', { state: { selectedTankName: effectiveName } });
@@ -35,25 +70,43 @@ export default function ElementDetails({ open, onClose, node, onShowConnections,
     <Drawer anchor="right" open={open} onClose={onClose}>
       <Box sx={{ width: 360, p: 3 }}>
         <Typography variant="h6" sx={{ fontWeight: 800 }}>{effectiveName}</Typography>
+        <Box sx={{ my: 2 }}>
+          <Typography variant="subtitle2" sx={{ color: '#475569' }}>Nombre</Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleRename();
+              }
+            }}
+            placeholder="Nombre del elemento"
+            sx={{ mt: 1 }}
+          />
+          <Button variant="contained" size="small" sx={{ mt: 1 }} onClick={handleRename}>Guardar nombre</Button>
+        </Box>
         <Divider sx={{ my: 2 }} />
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Nivel</Typography>
-        <Typography sx={{ mb: 1 }}>{data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'Sin datos'}</Typography>
+        <Typography sx={{ mb: 1 }}>{nivelValue != null ? `${Number(nivelValue).toFixed(2)} m` : 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Última lectura</Typography>
-        <Typography sx={{ mb: 1 }}>{data.fecha_hora || data.fecha || data.timestamp || data.ultimo_update || data.last_update || 'Sin datos'}</Typography>
+        <Typography sx={{ mb: 1 }}>{metricSource.fecha_hora || metricSource.fecha || metricSource.timestamp || metricSource.ultimo_update || metricSource.last_update || 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Porcentaje</Typography>
-        <Typography sx={{ mb: 1 }}>{data.porcentaje != null ? `${Math.round(data.porcentaje)} %` : 'Sin datos'}</Typography>
+        <Typography sx={{ mb: 1 }}>{porcentajeValue != null ? `${Math.round(Number(porcentajeValue))} %` : 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Estado</Typography>
-        <Typography sx={{ mb: 2 }}>{data.estado || data.status || 'Sin datos'}</Typography>
+        <Typography sx={{ mb: 2 }}>{metricSource.estado || metricSource.status || 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Capacidad actual</Typography>
-        <Typography sx={{ mb: 1 }}>{data.capacidad_actual_m3 != null ? `${data.capacidad_actual_m3} m³` : (data.capacidad_actual != null ? `${data.capacidad_actual} m³` : 'Sin datos')}</Typography>
+        <Typography sx={{ mb: 1 }}>{capacidadActual != null ? `${Number(capacidadActual).toFixed(2)} m³` : 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Capacidad máxima</Typography>
-        <Typography sx={{ mb: 2 }}>{data.capacidad_maxima_m3 != null ? `${data.capacidad_maxima_m3} m³` : (data.capacidad_maxima != null ? `${data.capacidad_maxima} m³` : 'Sin datos')}</Typography>
+        <Typography sx={{ mb: 2 }}>{capacidadMaxima != null ? `${Number(capacidadMaxima).toFixed(2)} m³` : 'Sin datos'}</Typography>
 
         <Typography variant="subtitle2" sx={{ color: '#475569' }}>Entradas</Typography>
         {entradas.length ? (

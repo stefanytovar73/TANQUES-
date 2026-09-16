@@ -6,6 +6,8 @@ import "./index.css";
 
 import App from "./App";
 import theme from "./theme/theme";
+// Telemetry boot: start PTAP early at app load
+import './services/telemetryBoot';
 
 ReactDOM.createRoot(document.getElementById("root")).render(
     <React.StrictMode>

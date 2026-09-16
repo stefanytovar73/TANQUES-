@@ -7,7 +7,7 @@ import WaterDropRoundedIcon from "@mui/icons-material/WaterDropRounded";
 import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import tanqueService from "../../services/tanqueService";
-import { findCatalogEntry, loadCatalog, mergeApiTanquesWithCatalog, saveCatalog, updateCatalogEntry, normalizeText, calculateDisplayPorcentaje } from "../../config/tankCatalog";
+import { findCatalogEntry, loadCatalog, mergeApiTanquesWithCatalog, saveCatalog, updateCatalogEntry, normalizeText, calculateDisplayPorcentaje, addDeletedTank, isTankDeleted } from "../../config/tankCatalog";
 
 const getTankStatusColor = (porcentaje) => {
   if (!Number.isFinite(porcentaje)) return "#9DA9BB";
@@ -144,13 +144,7 @@ function Tanques() {
   // Aplica en lote las capacidades y niveles que proporcionó el usuario.
 
   useEffect(() => {
-    const initialize = async () => {
-      await cargarTanques(true, true);
-    };
-
-    initialize();
-    const interval = setInterval(() => cargarTanques(true, false), 5000);
-    return () => clearInterval(interval);
+    cargarTanques(true, true);
   }, [cargarTanques]);
 
   const normalizarTexto = (texto = "") =>
@@ -218,6 +212,8 @@ function Tanques() {
   const tanques = useMemo(() => mergeApiTanquesWithCatalog(apiTanques, catalog), [apiTanques, catalog]);
 
   const tanquesFiltrados = useMemo(() => tanques.filter((tanque) => {
+    // Don't show deleted tanks
+    if (isTankDeleted(tanque)) return false;
     const displayName = (tanque.display_name || tanque.nombre || tanque.tag || "").toLowerCase();
     return (
       (tanque.nombre || tanque.tag || "").toLowerCase().includes(busqueda.toLowerCase()) ||
@@ -231,6 +227,46 @@ function Tanques() {
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState("");
   const [snackbarSeverity, setSnackbarSeverity] = useState("success");
+
+  // Inline rename state: double-click on a tank name to edit it directly
+  const [editingRowKey, setEditingRowKey] = useState(null);
+  const [editingDraft, setEditingDraft] = useState("");
+
+  const startInlineRename = (rowKey, currentName, e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setEditingRowKey(rowKey);
+    setEditingDraft(currentName);
+  };
+
+  const saveInlineRename = (tanque) => {
+    const newName = (editingDraft || "").trim();
+    setEditingRowKey(null);
+    if (!newName || newName === (tanque.display_name || tanque.nombre || "")) return;
+
+    // Find and update catalog entry
+    const currentCatalog = catalogRef.current.length ? catalogRef.current : loadCatalogFromStorage();
+    const lookupTank = {
+      id: tanque.id ?? null,
+      nombre: tanque.nombre || tanque.display_name,
+      display_name: tanque.display_name || tanque.nombre,
+      tag: tanque.tag || tanque.nombre || "",
+    };
+    const entry = findCatalogEntry(lookupTank, currentCatalog);
+    const catalogId = entry?.id || normalizeText(tanque.tag || tanque.nombre || tanque.display_name || "");
+
+    const updatedCatalog = updateCatalogEntry(currentCatalog, catalogId, {
+      nombre: newName,
+      display_name: newName,
+    });
+    saveCatalog(updatedCatalog);
+    window.location.reload();
+  };
+
+  const cancelInlineRename = () => {
+    setEditingRowKey(null);
+    setEditingDraft("");
+  };
 
   const openCreate = () => {
     setIsCreating(true);
@@ -269,36 +305,40 @@ function Tanques() {
   const handleDelete = async () => {
     if (!deleteTarget) return setDeleteConfirmOpen(false);
     try {
-      // remove local catalog entry if present
+      // Mark as deleted in localStorage so it stays deleted after reload
+      addDeletedTank(deleteTarget);
+
+      // Remove local catalog entry if present
       const loaded = loadCatalogFromStorage();
       const matched = findCatalogEntry(deleteTarget, loaded);
-      let newCatalog = loaded;
       if (matched) {
-        newCatalog = loaded.filter((e) => e.id !== matched.id);
+        const newCatalog = loaded.filter((e) => e.id !== matched.id);
         saveCatalog(newCatalog);
-        catalogRef.current = newCatalog;
-        setCatalog(newCatalog);
       }
 
+      // Try server delete (non-blocking)
       const id = deleteTarget.id;
       if (id && String(id).match(/^\d+$/)) {
-        await tanqueService.deleteTanque(id);
+        try {
+          await tanqueService.deleteTanque(id);
+        } catch (e) {
+          console.warn('Error al eliminar en servidor', e);
+        }
       }
-      // refresh list
-      await cargarTanques();
-      setSnackbarMessage('Configuración local eliminada.');
-      setSnackbarSeverity('success');
-      setSnackbarOpen(true);
+
+      setDeleteConfirmOpen(false);
+      setDeleteTarget(null);
+
+      // Reload page to show updated list
+      window.location.reload();
     } catch (e) {
       console.error('Error deleting tanque', e);
-      // fallback: remove locally from API list copy
-      setApiTanques((t) => t.filter((x) => x.nombre !== deleteTarget.nombre));
-      setSnackbarMessage('Error al eliminar en el servidor; eliminado localmente.');
-      setSnackbarSeverity('warning');
+      setDeleteConfirmOpen(false);
+      setDeleteTarget(null);
+      setSnackbarMessage('Error al eliminar el tanque.');
+      setSnackbarSeverity('error');
       setSnackbarOpen(true);
     }
-    setDeleteConfirmOpen(false);
-    setDeleteTarget(null);
   };
 
   const handleSnackbarClose = (event, reason) => {
@@ -313,13 +353,14 @@ function Tanques() {
       if (value === null || value === undefined || value === "") return "";
       return Number.isFinite(Number(value)) ? String(value) : "";
     };
-    const rawName = tanque.nombre || tanque.display_name || tanque.tag || "";
-    const canonicalName = getCanonicalTankName(rawName);
+    // Use display_name directly — this is the name the user sees and wants to edit
+    const displayName = tanque.display_name || tanque.nombre || tanque.tag || "";
+    const apiTag = tanque.tag || tanque.nombre || "";
     setForm({
       id: tanque.id ?? null,
-      originalNombre: rawName,
-      nombre: canonicalName,
-      tag: tanque.tag ?? rawName,
+      originalNombre: displayName,
+      nombre: displayName,
+      tag: apiTag,
       nivelMaximo: safeNumber(tanque.nivel_maximo ?? tanque.nivel_maximo),
       capacidadActual: safeNumber(catalogEntry.capacidad_actual_m3 ?? tanque.capacidad_actual_m3 ?? tanque.capacidad_actual),
       capacidadMaxima: safeNumber(catalogEntry.capacidad_maxima_m3 ?? tanque.capacidad_maxima_m3 ?? tanque.capacidad_maxima),
@@ -353,37 +394,33 @@ function Tanques() {
   const applySave = async () => {
     const parseNumberValue = (value) => (value !== null && value !== undefined && value !== "" ? Number(value) : null);
 
-    const payloadName = form.nombre && normalizeText(form.nombre) !== normalizeText(form.originalNombre || "")
-      ? form.nombre
-      : form.originalNombre || form.nombre || "";
+    const newName = (form.nombre || "").trim();
+    if (!newName) {
+      setSnackbarMessage('El nombre no puede estar vacío.');
+      setSnackbarSeverity('error');
+      setSnackbarOpen(true);
+      return;
+    }
 
-    const payload = {
-      nombre: payloadName,
-    };
-
-    const formTank = {
-      id: form.id ?? null,
-      nombre: form.originalNombre || form.nombre,
-      display_name: form.nombre || form.originalNombre,
-      tag: form.originalNombre || form.nombre,
-    };
-    const rawTankLookup = {
+    // Use tag or originalNombre to find existing catalog entry
+    const lookupTank = {
       id: form.id ?? null,
       nombre: form.originalNombre || form.nombre,
       display_name: form.originalNombre || form.nombre,
-      tag: form.originalNombre || form.nombre,
+      tag: form.tag || form.originalNombre || form.nombre,
     };
 
     const currentCatalog = catalogRef.current.length ? catalogRef.current : loadCatalogFromStorage();
-    const existingCatalogEntry = [formTank, rawTankLookup].map((candidate) => findCatalogEntry(candidate, currentCatalog)).find(Boolean) || null;
-    const catalogId = existingCatalogEntry?.id || normalizeText(form.originalNombre || form.tag || form.nombre || payloadName || "") || (form.id ? normalizeText(String(form.id)) : "");
+    const existingCatalogEntry = findCatalogEntry(lookupTank, currentCatalog);
+    const catalogId = existingCatalogEntry?.id
+      || normalizeText(form.tag || form.originalNombre || form.nombre || "")
+      || (form.id ? normalizeText(String(form.id)) : "");
 
-    const rawAlturaRebose = parseNumberValue(form.alturaRebose);
     const catalogUpdates = {
-      nombre: form.nombre,
-      display_name: form.nombre,
+      nombre: newName,
+      display_name: newName,
       area_m2: parseNumberValue(form.area),
-      altura_rebose: rawAlturaRebose,
+      altura_rebose: parseNumberValue(form.alturaRebose),
       altura_total: parseNumberValue(form.alturaTotal),
       volumen: parseNumberValue(form.volumen),
       largo: parseNumberValue(form.largo),
@@ -399,88 +436,37 @@ function Tanques() {
       volumen_restante_m3: parseNumberValue(form.reboseDisponible),
     };
 
-    // update catalog in memory and persist, then validate persistence before showing success
-    const updatedCatalog = updateCatalogEntry(catalogRef.current.length ? catalogRef.current : catalog, catalogId, catalogUpdates);
     try {
-      console.log('Saving updated catalog (applySave)', updatedCatalog.slice ? updatedCatalog.slice(0,5) : updatedCatalog);
+      // Update catalog and save to localStorage
+      const updatedCatalog = updateCatalogEntry(currentCatalog, catalogId, catalogUpdates);
       saveCatalog(updatedCatalog);
-      const reloadedCatalog = loadCatalogFromStorage();
-      console.log('Reloaded catalog after save', reloadedCatalog && reloadedCatalog.slice ? reloadedCatalog.slice(0,5) : reloadedCatalog);
 
-      const persistedEntry = findCatalogEntry(formTank, reloadedCatalog);
-      const didPersist = !!persistedEntry && (
-        ((persistedEntry.altura_rebose == null && catalogUpdates.altura_rebose == null) || persistedEntry.altura_rebose === catalogUpdates.altura_rebose)
-      );
-
-      let finalPersistedCatalog = reloadedCatalog;
-      if (!didPersist) {
-        const fallbackCatalog = reloadedCatalog.map((item) => {
-          const normalizedCatalogId = normalizeText(catalogId || "");
-          const matchesId = item.id === catalogId || item.aliases.includes(normalizedCatalogId);
-          if (!matchesId) return item;
-          return {
-            ...item,
-            ...catalogUpdates,
-          };
-        });
-
-        saveCatalog(fallbackCatalog);
-        finalPersistedCatalog = loadCatalogFromStorage();
-      }
-
-      const finalPersistedEntry = findCatalogEntry(formTank, finalPersistedCatalog);
-      const finalDidPersist = !!finalPersistedEntry && (
-        ((finalPersistedEntry.altura_rebose == null && catalogUpdates.altura_rebose == null) || finalPersistedEntry.altura_rebose === catalogUpdates.altura_rebose)
-      );
-
-      if (!finalDidPersist) {
-        throw new Error('La persistencia local falló: el catálogo no contiene la actualización esperada.');
-      }
-
-      catalogRef.current = finalPersistedCatalog;
-      setCatalog(finalPersistedCatalog);
-
-      // update apiTanques in memory for immediate UI update
-      setApiTanques((currentApi) =>
-        currentApi.map((item) => {
-          if ((item.id && form.id && String(item.id) === String(form.id)) || areTankNamesEqual(item, formTank)) {
-            return mergeApiTanquesWithCatalog([item], finalPersistedCatalog)[0];
-          }
-          return item;
-        })
-      );
-
-      closeDialog();
-
-      // only after local persistence show success; still attempt server sync but don't rely on it
+      // Try to sync with server (don't block on failure)
       try {
+        const payload = { nombre: newName };
         if (isCreating) {
           await tanqueService.createTanque(payload);
         } else {
           const existingTank = tanques.find((t) =>
-            (t.id && form.id && String(t.id) === String(form.id)) || areTankNamesEqual(t, formTank)
+            (t.id && form.id && String(t.id) === String(form.id)) ||
+            areTankNamesEqual(t, lookupTank)
           );
-          const updateId = existingTank && existingTank.id ? existingTank.id : null;
+          const updateId = existingTank?.id;
           if (updateId && String(updateId).match(/^\d+$/)) {
             await tanqueService.updateTanque(updateId, payload);
           } else {
             await tanqueService.createTanque(payload);
           }
         }
-        setSnackbarMessage('Configuración guardada correctamente.');
-        setSnackbarSeverity('success');
-        setSnackbarOpen(true);
       } catch (serverErr) {
-        console.warn('Error al sincronizar con servidor, cambios guardados localmente', serverErr);
-        setSnackbarMessage('Cambios guardados localmente; sincronización con servidor falló.');
-        setSnackbarSeverity('warning');
-        setSnackbarOpen(true);
+        console.warn('Sincronización con servidor falló, cambios guardados localmente', serverErr);
       }
 
-      await cargarTanques();
-    } catch (persistErr) {
-      console.error('Persistencia local falló', persistErr);
-      setSnackbarMessage('No fue posible guardar la configuración localmente.');
+      // Reload page so everything shows correctly
+      window.location.reload();
+    } catch (err) {
+      console.error('Error al guardar', err);
+      setSnackbarMessage('Error al guardar la configuración.');
       setSnackbarSeverity('error');
       setSnackbarOpen(true);
     }
@@ -562,7 +548,26 @@ function Tanques() {
                             <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
                               <Box sx={{ width: 32, height: 32, borderRadius: "50%", bgcolor: "#E6F0FF", color: "#0d4fa1", display: "grid", placeItems: "center" }}><WaterDropRoundedIcon sx={{ fontSize: 18 }} /></Box>
                               <Box sx={{ minWidth: 0 }}>
-                                <Typography sx={{ fontWeight: 800, color: "#102B4A" }}>{displayName}</Typography>
+                                {editingRowKey === rowKey ? (
+                                  <input
+                                    autoFocus
+                                    value={editingDraft}
+                                    onChange={(e) => setEditingDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); saveInlineRename(tanque); }
+                                      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelInlineRename(); }
+                                    }}
+                                    onBlur={() => saveInlineRename(tanque)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    style={{ border: "1px solid #90b4de", borderRadius: 4, background: "#fff", color: "#102B4A", fontSize: 14, fontWeight: 800, padding: "4px 8px", outline: "none", width: "100%", minWidth: 120 }}
+                                  />
+                                ) : (
+                                  <Typography
+                                    onDoubleClick={(e) => startInlineRename(rowKey, displayName, e)}
+                                    sx={{ fontWeight: 800, color: "#102B4A", cursor: "text", "&:hover": { textDecoration: "underline dotted #90b4de" } }}
+                                    title="Doble clic para renombrar"
+                                  >{displayName}</Typography>
+                                )}
                                 {shouldShowSubtitle && <Typography variant="caption" color="text.secondary">{rawName}</Typography>}
                               </Box>
                             </Box>

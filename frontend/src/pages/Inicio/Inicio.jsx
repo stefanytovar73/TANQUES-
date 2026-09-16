@@ -26,6 +26,7 @@ import {
 import SortableTanqueCard from "../../components/dashboard/SortableTanqueCard";
 import TanqueCard from "../../components/dashboard/TanqueCard";
 import tanqueService from "../../services/tanqueService";
+import diagramService from "../../services/diagramService";
 import { loadCatalog, mergeApiTanquesWithCatalog, normalizeText, calculateDisplayPorcentaje } from "../../config/tankCatalog";
 
 // Clave donde se guarda el orden personalizado de los tanques
@@ -109,6 +110,7 @@ export default function Inicio() {
   const [error, setError] = useState("");
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeId, setActiveId] = useState(null);
+  const [showList, setShowList] = useState(false);
 
   // Guardamos el orden original de la API para poder restablecerlo
   const apiOrderRef = useRef([]);
@@ -124,7 +126,70 @@ export default function Inicio() {
     try {
       const response = await tanqueService.getTanques(!showLoading);
       const catalog = loadCatalog();
-      const merged = mergeApiTanquesWithCatalog(response.tanques || [], catalog);
+      let merged = mergeApiTanquesWithCatalog(response.tanques || [], catalog);
+      // merge manual overrides from persisted diagram state when available
+      try {
+        const remote = await diagramService.getState();
+        const savedNodes = (remote && remote.nodes) || {};
+        const savedMap = new Map(Object.entries(savedNodes).map(([id, entry]) => [id, entry]));
+        merged = (merged || []).map((t) => {
+          try {
+            const candidates = [t.tag, t.apiName, t.nombre, t.display_name, t.id].map(x => String(x || '').toLowerCase());
+            let foundEntry = null;
+            for (const [nid, entry] of savedMap.entries()) {
+              const entryCandidates = [entry.tag, entry.apiName, entry.originalName, entry.display_name, entry.nombre, nid].map(x => String(x || '').toLowerCase());
+              if (entryCandidates.some(ec => ec && candidates.includes(ec))) { foundEntry = entry; break; }
+            }
+            if (foundEntry) {
+              const manual = (foundEntry.manual_porcentaje != null) ? Number(foundEntry.manual_porcentaje) : null;
+              let manualRebose = (foundEntry.manual_rebose_override != null) ? Number(foundEntry.manual_rebose_override) : null;
+              const t2 = { ...t };
+              if (manual != null) {
+                // if nivel is available, recompute rebose so manual pct stays consistent with the latest nivel
+                const nivel = Number.isFinite(Number(t.nivel ?? t.valor_m ?? t.valor)) ? Number(t.nivel ?? t.valor_m ?? t.valor) : null;
+                if (nivel != null && manual > 0) {
+                  manualRebose = Number((nivel * 100) / manual);
+                }
+                t2.manual_porcentaje = manual;
+                t2.manual_rebose_override = manualRebose;
+                // apply manual pct as the display porcentaje so UI reflects override
+                t2.porcentaje = manual;
+              }
+              return t2;
+            }
+            return t;
+          } catch (e) { return t; }
+        });
+      } catch (e) {}
+
+      // Apply temporary local-only overrides from localStorage (does not persist to server)
+      try {
+        const raw = localStorage.getItem('local_manual_overrides');
+        if (raw) {
+          const overrides = JSON.parse(raw || '{}') || {};
+          merged = (merged || []).map((t) => {
+            try {
+              const keys = [t.id, t.tag, t.display_name, t.apiName, t.nombre].filter(Boolean).map(x => String(x).toLowerCase());
+              let found = null;
+              for (const k of Object.keys(overrides || {})) {
+                if (!k) continue;
+                const lower = String(k || '').toLowerCase();
+                if (keys.includes(lower)) { found = overrides[k]; break; }
+              }
+              if (found != null) {
+                const parsed = Number.isFinite(Number(found)) ? Number(found) : null;
+                const nivel = Number.isFinite(Number(t.nivel ?? t.valor_m ?? t.valor)) ? Number(t.nivel ?? t.valor_m ?? t.valor) : null;
+                const manualRebose = (parsed != null && nivel != null && parsed > 0) ? Number((nivel * 100) / parsed) : (t.manual_rebose_override ?? null);
+                const t2 = { ...t, manual_porcentaje: parsed, manual_rebose_override: manualRebose };
+                if (parsed != null) t2.porcentaje = parsed;
+                return t2;
+              }
+              return t;
+            } catch (e) { return t; }
+          });
+        }
+      } catch (e) {}
+
       setTanques(merged);
 
       // Guardar orden "puro" de API (sin personalización)
@@ -142,6 +207,71 @@ export default function Inicio() {
       if (showLoading) setLoading(false);
     }
   }, []);
+
+  // Find a matching saved node id in diagram state for a tank
+  const findSavedNodeIdForTank = (savedNodes = {}, tanque) => {
+    const candidates = [tanque.tag, tanque.apiName, tanque.nombre, tanque.display_name, tanque.id].map(x => String(x || '').toLowerCase());
+    for (const [nid, entry] of Object.entries(savedNodes || {})) {
+      const entryCandidates = [entry.tag, entry.apiName, entry.originalName, entry.display_name, entry.nombre, nid].map(x => String(x || '').toLowerCase());
+      if (entryCandidates.some(ec => ec && candidates.includes(ec))) return nid;
+    }
+    return null;
+  };
+
+  // Defer mounting the heavy list of cards until after first paint to improve startup
+  useEffect(() => {
+    let id = null;
+    try {
+      id = setTimeout(() => setShowList(true), 50);
+    } catch (e) {
+      setShowList(true);
+    }
+    return () => { try { if (id) clearTimeout(id); } catch (e) {} };
+  }, []);
+
+  const handleManualPctChange = async (tanque, pct) => {
+    try {
+      let value = pct;
+      if (typeof value === 'undefined' || value === null) {
+        const raw = window.prompt(`Editar porcentaje para ${tanque.display_name || tanque.nombre || tanque.tag || tanque.id} (valor actual: ${tanque.manual_porcentaje != null ? tanque.manual_porcentaje : (tanque.porcentaje != null ? tanque.porcentaje : 'Sin datos')})`, tanque.manual_porcentaje != null ? String(tanque.manual_porcentaje) : (tanque.porcentaje != null ? String(Math.round(tanque.porcentaje)) : ''));
+        if (raw === null) return; // cancelled
+        if (raw === '') value = null; else value = raw;
+      }
+      const parsed = Number.isFinite(Number(value)) ? Number(value) : null;
+      const remote = await diagramService.getState();
+      const saved = remote || {};
+      saved.nodes = saved.nodes || {};
+      const nodeId = findSavedNodeIdForTank(saved.nodes, tanque) || (tanque.tag || tanque.display_name || tanque.id || `tanque-${Date.now()}`);
+      const prev = saved.nodes[nodeId] && typeof saved.nodes[nodeId] === 'object' ? saved.nodes[nodeId] : {};
+      const nivel = Number.isFinite(Number(tanque.nivel ?? tanque.valor_m ?? tanque.valor)) ? Number(tanque.nivel ?? tanque.valor_m ?? tanque.valor) : null;
+      const manualRebose = (parsed != null && nivel != null && parsed > 0) ? Number((nivel * 100) / parsed) : (prev.manual_rebose_override ?? null);
+      saved.nodes[nodeId] = { ...(prev || {}), manual_porcentaje: parsed, manual_rebose_override: manualRebose };
+      await diagramService.saveState(saved);
+      // Update local UI immediately
+      setTanques((prevList) => prevList.map(t => {
+        const matchByStrict = (a, b) => {
+          if (!a || !b) return false;
+          return String(a).toLowerCase() === String(b).toLowerCase();
+        };
+        const isMatch = (
+          (tanque.id && matchByStrict(t.id, tanque.id)) ||
+          (tanque.tag && t.tag && matchByStrict(t.tag, tanque.tag)) ||
+          (tanque.apiName && t.apiName && matchByStrict(t.apiName, tanque.apiName)) ||
+          (tanque.display_name && t.display_name && matchByStrict(t.display_name, tanque.display_name)) ||
+          (tanque.nombre && t.nombre && matchByStrict(t.nombre, tanque.nombre))
+        );
+        if (!isMatch) return t;
+        const copy = { ...t, manual_porcentaje: parsed, manual_rebose_override: manualRebose, porcentaje: parsed };
+        return copy;
+      }));
+      // refresh orderedTanques as well
+      setOrderedTanques((prevList) => prevList.map(t => {
+        const equals = (a, b) => (a != null && b != null) && String(a).toLowerCase() === String(b).toLowerCase();
+        const matched = (tanque.id && equals(t.id, tanque.id)) || (tanque.tag && equals(t.tag, tanque.tag)) || (tanque.apiName && equals(t.apiName, tanque.apiName));
+        return matched ? ({ ...t, manual_porcentaje: parsed, manual_rebose_override: manualRebose, porcentaje: parsed }) : t;
+      }));
+    } catch (e) { console.warn('manual pct save failed', e); }
+  };
 
   useEffect(() => {
     fetchTanques();
@@ -192,6 +322,22 @@ export default function Inicio() {
       localStorage.removeItem(ORDER_STORAGE_KEY);
     } catch {}
     setOrderedTanques(applyOrder(tanques, []));
+  };
+
+  // Limpia la cache local relacionada con el diagrama y fuerza recarga
+  const handleSyncNow = async () => {
+    try {
+      localStorage.removeItem('district_state');
+      localStorage.removeItem('district_state_backup');
+      localStorage.removeItem('diagram_state');
+      localStorage.removeItem('local_manual_overrides');
+    } catch (e) {}
+    try {
+      await fetchTanques(true);
+    } catch (e) {
+      // fallback a recargar la página
+      try { window.location.reload(); } catch {};
+    }
   };
 
   // Tanque activo (el que se está arrastrando) para el DragOverlay
@@ -285,6 +431,27 @@ export default function Inicio() {
                     </Button>
                   </Tooltip>
                 )}
+                {/* Botón sincronizar ahora */}
+                <Tooltip title="Limpiar cache local y recargar datos desde servidor">
+                  <Button
+                    size="small"
+                    startIcon={<StorageIcon />}
+                    onClick={handleSyncNow}
+                    sx={{
+                      fontSize: 11,
+                      textTransform: "none",
+                      color: "#64748B",
+                      borderColor: "#CBD5E1",
+                      "&:hover": { borderColor: "#94A3B8", bgcolor: "#F1F5F9" },
+                      border: "1px solid #CBD5E1",
+                      borderRadius: "8px",
+                      px: 1.5,
+                      py: 0.4,
+                    }}
+                  >
+                    Sincronizar ahora
+                  </Button>
+                </Tooltip>
               </Box>
             </Box>
 
@@ -364,9 +531,9 @@ export default function Inicio() {
                   justifyItems: "center",
                 }}
               >
-                {orderedTanques.map((tanque, index) => {
+                {showList && orderedTanques.map((tanque, index) => {
                   const id = getTanqueKey(tanque, index);
-                  return <SortableTanqueCard key={id} id={id} tanque={tanque} />;
+                  return <SortableTanqueCard key={id} id={id} tanque={tanque} onManualPctChange={handleManualPctChange} />;
                 })}
               </Box>
             </SortableContext>

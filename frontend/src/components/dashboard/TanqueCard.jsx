@@ -18,7 +18,7 @@ const getTankStatusLabel = (porcentaje) => {
     return "Normal";
 };
 
-function TanqueCard({ tanque }) {
+function TanqueCard({ tanque, onManualPctChange }) {
     const displayName = tanque.display_name ?? tanque.nombre ?? tanque.tag ?? "Sin nombre";
     const porcentaje = calculateDisplayPorcentaje(tanque);
     const statusColor = getTankStatusColor(porcentaje);
@@ -63,7 +63,7 @@ function TanqueCard({ tanque }) {
 
                 {/* Visual del tanque */}
                 <Box sx={{ display: "grid", placeItems: "center" }}>
-                    <TanqueVisual porcentaje={porcentaje} />
+                    <TanqueVisual porcentaje={porcentaje} tanque={tanque} manual_porcentaje={tanque.manual_porcentaje} onManualPctChange={onManualPctChange} />
                 </Box>
 
                 {/* Nivel actual */}

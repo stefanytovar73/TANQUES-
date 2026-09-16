@@ -26,11 +26,11 @@ export default function MainLayout() {
     };
 
     return (
-        <Box sx={{ display: 'grid', gridTemplateColumns: `${collapsed ? collapsedWidth : drawerWidth}px 1fr`, gridTemplateRows: '92px 1fr', minHeight: '100vh', bgcolor: '#f4f7fb', overflowX: 'hidden' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: `${collapsed ? collapsedWidth : drawerWidth}px 1fr`, gridTemplateRows: '92px 1fr', minHeight: '100vh', bgcolor: '#f4f7fb', overflowX: 'hidden', pointerEvents: 'auto' }}>
             <CssBaseline />
 
             {/* Sidebar - occupies first column and both rows */}
-            <Box component="nav" sx={{ gridColumn: '1', gridRow: '1 / 3', width: { md: drawerWidth }, flexShrink: { md: 0 } }} aria-label="sidebar">
+            <Box component="nav" sx={{ gridColumn: '1', gridRow: '1 / 3', width: { md: drawerWidth }, flexShrink: { md: 0 }, pointerEvents: 'auto' }} aria-label="sidebar">
                 <Drawer
                     variant="temporary"
                     open={mobileOpen}
@@ -51,13 +51,13 @@ export default function MainLayout() {
             </Box>
 
             {/* Header - top right */}
-                <Box component="header" sx={{ gridColumn: '2', gridRow: '1' }}>
+                <Box component="header" sx={{ gridColumn: '2', gridRow: '1', pointerEvents: 'auto' }}>
                 <Header onOpenSidebar={headerToggle} />
             </Box>
 
             {/* Main content - below header */}
-            <Box component="main" sx={{ gridColumn: '2', gridRow: '2', flex: '1 1 auto', width: { xs: '100%', md: 'auto' }, minWidth: 0 }}>
-                <Box sx={{ p: { xs: 2, sm: 3, lg: 4 }, maxWidth: 1900, mx: 'auto' }}>
+            <Box component="main" sx={{ gridColumn: '2', gridRow: '2', flex: '1 1 auto', width: { xs: '100%', md: 'auto' }, minWidth: 0, pointerEvents: 'auto' }}>
+                <Box sx={{ p: { xs: 2, sm: 3, lg: 4 }, maxWidth: 1900, mx: 'auto', pointerEvents: 'auto' }} data-testid="main-content-wrap">
                     <Outlet />
                 </Box>
             </Box>

@@ -55,32 +55,6 @@ class IbalApiService
                 'exception' => get_class($e),
             ]);
 
-            // Intentar fallback local (archivo ../tanques.json) para desarrollo offline
-            try {
-                $localPath = base_path('../tanques.json');
-                if (file_exists($localPath)) {
-                    $raw = file_get_contents($localPath);
-                    $local = json_decode($raw, true);
-                    if (is_array($local) && isset($local['tanques'])) {
-                        return [
-                            'status' => 'fallback',
-                            'mensaje' => 'Usando datos locales (fallback)',
-                            'tanques' => $local['tanques']
-                        ];
-                    }
-                    // Si el archivo contiene directamente un array de tanques
-                    if (is_array($local)) {
-                        return [
-                            'status' => 'fallback',
-                            'mensaje' => 'Usando datos locales (fallback)',
-                            'tanques' => $local
-                        ];
-                    }
-                }
-            } catch (\Throwable $e2) {
-                Log::warning('IbalApiService: fallback local falló', ['msg' => $e2->getMessage()]);
-            }
-
             return [
                 'status' => 'error',
                 'mensaje' => 'Error de conexión con IBAL: ' . $e->getMessage(),

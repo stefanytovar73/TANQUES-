@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { loadCatalog, saveCatalog, mergeApiTanquesWithCatalog, findCatalogEntry, updateCatalogEntry, normalizeText, DEFAULT_CATALOG } from './src/config/tankCatalog.js';
+import { loadCatalog, saveCatalog, mergeApiTanquesWithCatalog, findCatalogEntry, updateCatalogEntry, normalizeText, getDefaultCatalog } from './src/config/tankCatalog.js';
 
 // ensure localStorage exists in Node so saveCatalog/loadCatalog persist during this run
 if (typeof globalThis.localStorage === 'undefined') {

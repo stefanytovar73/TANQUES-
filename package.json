@@ -3,7 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "dev:all": "concurrently \"cd backend && php artisan serve --host=127.0.0.1 --port=8001\" \"node ws-server.js\" \"cd frontend && npm run dev -- --host 127.0.0.1\" -k --names backend,ws,frontend --prefix name"
+    "dev:all": "node scripts/start-dev.js",
+    "start": "npm run dev:all"
   },
   "devDependencies": {
     "concurrently": "^8.0.1"

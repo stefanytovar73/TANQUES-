@@ -3,236 +3,156 @@ import api from "../api/axios";
 let cache = null;
 let cacheExpiresAt = 0;
 let pendingRequest = null;
-
 const CACHE_TTL_MS = 30000;
-const LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-const STORAGE_KEYS = {
-  tanquesFresh: 'ibal-tanques:tanques-cache',
-  tanquesLast: 'ibal-tanques:tanques-last-known',
-  captacionFresh: 'ibal-tanques:captacion-cache',
-  captacionLast: 'ibal-tanques:captacion-last-known',
-  ptapFresh: 'ibal-tanques:ptap-cache',
-  ptapLast: 'ibal-tanques:ptap-last-known',
-};
-
-const readStored = (storage, key, maxAgeMs = null) => {
-  try {
-    const raw = storage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || !parsed.data) return null;
-
-    if (maxAgeMs != null) {
-      const savedAt = Number(parsed.savedAt || 0);
-      if (!savedAt || Date.now() - savedAt > maxAgeMs) return null;
-    }
-
-    if (parsed.expiresAt != null && Date.now() >= Number(parsed.expiresAt)) {
-      return null;
-    }
-
-    return parsed.data;
-  } catch {
-    return null;
-  }
-};
-
-const writeStored = (storage, key, data, expiresAt = null) => {
-  try {
-    storage.setItem(key, JSON.stringify({
-      data,
-      savedAt: Date.now(),
-      ...(expiresAt != null ? { expiresAt } : {}),
-    }));
-  } catch {
-    // Cache is an optimization only.
-  }
-};
-
-const readFreshSession = (key) => readStored(sessionStorage, key);
-const readLastKnown = (key) => readStored(localStorage, key, LAST_KNOWN_MAX_AGE_MS);
-
-const tankServiceInternal = {
-  captacionCache: null,
-  captacionExpiresAt: 0,
-  captacionPending: null,
-  ptapCache: null,
-  ptapExpiresAt: 0,
-  ptapPending: null,
-};
+const tankServiceInternal = {};
 
 const invalidateCache = () => {
   cache = null;
   cacheExpiresAt = 0;
   pendingRequest = null;
-  try { sessionStorage.removeItem(STORAGE_KEYS.tanquesFresh); } catch {}
-  try { localStorage.removeItem(STORAGE_KEYS.tanquesLast); } catch {}
 };
 
-const getMetric = async ({
-  kind,
-  url,
-  freshKey,
-  lastKey,
-  forceRefresh = false,
-}) => {
-  const cacheKey = `${kind}Cache`;
-  const expiresKey = `${kind}ExpiresAt`;
-  const pendingKey = `${kind}Pending`;
-  const now = Date.now();
-
-  if (!forceRefresh && tankServiceInternal[cacheKey] && now < tankServiceInternal[expiresKey]) {
-    return tankServiceInternal[cacheKey];
+const normalizeTanquesResponse = (payload) => {
+  if (!payload || typeof payload !== "object") {
+    const error = new Error("Respuesta inválida de /api/tanques");
+    error.code = "INVALID_TANQUES_RESPONSE";
+    throw error;
   }
 
-  if (!forceRefresh && !tankServiceInternal[cacheKey]) {
-    const fresh = readFreshSession(freshKey);
-    if (fresh) {
-      tankServiceInternal[cacheKey] = fresh;
-      tankServiceInternal[expiresKey] = now + CACHE_TTL_MS;
-      return fresh;
-    }
+  const status = String(payload.status || "").toLowerCase();
+  if (status === "error" || status === "invalid" || status === "fallback") {
+    const error = new Error(payload.mensaje || "IBAL no devolvió datos válidos");
+    error.code = "IBAL_CONNECTION_ERROR";
+    throw error;
   }
 
-  if (!forceRefresh && tankServiceInternal[pendingKey]) {
-    return tankServiceInternal[pendingKey];
+  if (!Array.isArray(payload.tanques)) {
+    const error = new Error("La respuesta de /api/tanques no incluye tanques válidos");
+    error.code = "INVALID_TANQUES_RESPONSE";
+    throw error;
   }
 
-  tankServiceInternal[pendingKey] = api.get(url)
-    .then((res) => {
-      const data = res.data;
-      const expiresAt = Date.now() + CACHE_TTL_MS;
-      tankServiceInternal[cacheKey] = data;
-      tankServiceInternal[expiresKey] = expiresAt;
-      writeStored(sessionStorage, freshKey, data, expiresAt);
-      writeStored(localStorage, lastKey, data);
-      return data;
-    })
-    .finally(() => {
-      tankServiceInternal[pendingKey] = null;
-    });
-
-  return tankServiceInternal[pendingKey];
-};
-
-const peekMetric = (kind, freshKey, lastKey) => {
-  const cacheKey = `${kind}Cache`;
-  const expiresKey = `${kind}ExpiresAt`;
-  if (tankServiceInternal[cacheKey] && Date.now() < tankServiceInternal[expiresKey]) {
-    return tankServiceInternal[cacheKey];
-  }
-  return readFreshSession(freshKey) || readLastKnown(lastKey);
+  return payload;
 };
 
 const tanqueService = {
   getTanques: async (forceRefresh = false) => {
     const now = Date.now();
-
     if (!forceRefresh && cache && now < cacheExpiresAt) {
       return cache;
     }
 
-    if (!forceRefresh && !cache) {
-      const fresh = readFreshSession(STORAGE_KEYS.tanquesFresh);
-      if (fresh) {
-        cache = fresh;
-        cacheExpiresAt = now + CACHE_TTL_MS;
+    // If the page included an early inline fetch, reuse its payload to avoid extra network delays.
+    try {
+      if (!forceRefresh && !cache && typeof window !== 'undefined' && window.__INITIAL_TANQUES) {
+        cache = window.__INITIAL_TANQUES;
+        cacheExpiresAt = Date.now() + CACHE_TTL_MS;
         return cache;
       }
-    }
+    } catch (e) {}
 
     if (pendingRequest && !forceRefresh) {
       return pendingRequest;
     }
 
-    pendingRequest = api.get("/tanques")
-      .then((response) => {
-        cache = response.data;
-        cacheExpiresAt = Date.now() + CACHE_TTL_MS;
-        writeStored(sessionStorage, STORAGE_KEYS.tanquesFresh, cache, cacheExpiresAt);
-        writeStored(localStorage, STORAGE_KEYS.tanquesLast, cache);
-        return cache;
-      })
-      .finally(() => {
-        pendingRequest = null;
-      });
+    pendingRequest = api.get("/tanques").then((response) => {
+      const payload = normalizeTanquesResponse(response.data);
+      cache = payload;
+      cacheExpiresAt = Date.now() + CACHE_TTL_MS;
+      pendingRequest = null;
+      return cache;
+    }).catch((error) => {
+      cache = null;
+      cacheExpiresAt = 0;
+      pendingRequest = null;
+      throw error;
+    });
 
     return pendingRequest;
   },
 
-  peekTanques: () => {
-    if (cache && Date.now() < cacheExpiresAt) return cache;
-    return readFreshSession(STORAGE_KEYS.tanquesFresh)
-      || readLastKnown(STORAGE_KEYS.tanquesLast);
+  getCaptacion: async (forceRefresh = false) => {
+    // cache específico para captacion
+    if (!tankServiceInternal.captacionCache) {
+      tankServiceInternal.captacionCache = null;
+      tankServiceInternal.captacionExpiresAt = 0;
+      tankServiceInternal.captacionPending = null;
+    }
+
+    const now = Date.now();
+    if (!forceRefresh && tankServiceInternal.captacionCache && now < tankServiceInternal.captacionExpiresAt) {
+      return tankServiceInternal.captacionCache;
+    }
+
+    if (tankServiceInternal.captacionPending && !forceRefresh) {
+      return tankServiceInternal.captacionPending;
+    }
+
+    tankServiceInternal.captacionPending = api.get('/caudales/captacion').then((res) => {
+      tankServiceInternal.captacionCache = res.data;
+      tankServiceInternal.captacionExpiresAt = Date.now() + CACHE_TTL_MS;
+      tankServiceInternal.captacionPending = null;
+      return tankServiceInternal.captacionCache;
+    }).catch((err) => { tankServiceInternal.captacionPending = null; throw err; });
+
+    return tankServiceInternal.captacionPending;
   },
 
-  getCaptacion: async (forceRefresh = false) => getMetric({
-    kind: 'captacion',
-    url: '/caudales/captacion',
-    freshKey: STORAGE_KEYS.captacionFresh,
-    lastKey: STORAGE_KEYS.captacionLast,
-    forceRefresh,
-  }),
+  getPtap: async (forceRefresh = false) => {
+    if (!tankServiceInternal.ptapCache) {
+      tankServiceInternal.ptapCache = null;
+      tankServiceInternal.ptapExpiresAt = 0;
+      tankServiceInternal.ptapPending = null;
+    }
 
-  peekCaptacion: () => peekMetric(
-    'captacion',
-    STORAGE_KEYS.captacionFresh,
-    STORAGE_KEYS.captacionLast,
-  ),
+    const now = Date.now();
+    if (!forceRefresh && tankServiceInternal.ptapCache && now < tankServiceInternal.ptapExpiresAt) {
+      return tankServiceInternal.ptapCache;
+    }
 
-  getPtap: async (forceRefresh = false) => getMetric({
-    kind: 'ptap',
-    url: '/caudales/ptap',
-    freshKey: STORAGE_KEYS.ptapFresh,
-    lastKey: STORAGE_KEYS.ptapLast,
-    forceRefresh,
-  }),
+    // Reuse inline-initialized PTAP payload if available to avoid duplicated network delay.
+    try {
+      if (!forceRefresh && !tankServiceInternal.ptapCache && typeof window !== 'undefined' && window.__INITIAL_PTAP) {
+        tankServiceInternal.ptapCache = window.__INITIAL_PTAP;
+        tankServiceInternal.ptapExpiresAt = Date.now() + CACHE_TTL_MS;
+        return tankServiceInternal.ptapCache;
+      }
+    } catch (e) {}
 
-  peekPtap: () => peekMetric(
-    'ptap',
-    STORAGE_KEYS.ptapFresh,
-    STORAGE_KEYS.ptapLast,
-  ),
+    if (tankServiceInternal.ptapPending && !forceRefresh) {
+      return tankServiceInternal.ptapPending;
+    }
 
-  // Dispara las tres fuentes que usa Distritos al mismo tiempo. Esto evita
-  // esperar a que ReactFlow monte cada tarjeta para recién consultar PTAP/captación.
-  preloadDistrictData: async (forceRefresh = false) => {
-    const [tanquesResult, captacionResult, ptapResult] = await Promise.allSettled([
-      tanqueService.getTanques(forceRefresh),
-      tanqueService.getCaptacion(forceRefresh),
-      tanqueService.getPtap(forceRefresh),
-    ]);
+    tankServiceInternal.ptapPending = api.get('/caudales/ptap').then((res) => {
+      tankServiceInternal.ptapCache = res.data;
+      tankServiceInternal.ptapExpiresAt = Date.now() + CACHE_TTL_MS;
+      tankServiceInternal.ptapPending = null;
+      return tankServiceInternal.ptapCache;
+    }).catch((err) => { tankServiceInternal.ptapPending = null; throw err; });
 
-    return {
-      tanques: tanquesResult.status === 'fulfilled' ? tanquesResult.value : null,
-      captacion: captacionResult.status === 'fulfilled' ? captacionResult.value : null,
-      ptap: ptapResult.status === 'fulfilled' ? ptapResult.value : null,
-    };
+    return tankServiceInternal.ptapPending;
   },
 
   getTanqueById: async (id) => {
     const response = await api.get(`/tanques/${id}`);
     return response.data;
   },
-
   createTanque: async (payload) => {
     invalidateCache();
     const response = await api.post('/tanques', payload);
     return response.data;
   },
-
   updateTanque: async (id, payload) => {
     invalidateCache();
     const response = await api.put(`/tanques/${id}`, payload);
     return response.data;
   },
-
   deleteTanque: async (id) => {
     invalidateCache();
     const response = await api.delete(`/tanques/${id}`);
     return response.data;
-  },
+  }
 };
 
 export default tanqueService;

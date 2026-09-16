@@ -6,9 +6,12 @@ import 'reactflow/dist/style.css';
 import TankNode from './TankNode';
 import tanqueService from '../../services/tanqueService';
 import diagramService from '../../services/diagramService';
-import { NODES as STATIC_NODES } from './districtLayout';
-import { calculateDisplayPorcentaje } from '../../config/tankCatalog';
-import { isValidSavedEdge, normalizeSavedEdge } from './edgeUtils';
+// Fallback import of persisted diagram for local dev verification when API is blocked by CORS
+// authoritative diagram state must come from backend via diagramService.getState()
+import { NODES as STATIC_NODES, CONNECTIONS as STATIC_CONNECTIONS } from './districtLayout';
+import { calculateDisplayPorcentaje, mergeApiTanquesWithCatalog, loadCatalog } from '../../config/tankCatalog';
+import ALTURAS_REBOSE_CALIBRADAS from '../../config/calibrations';
+import { isValidSavedEdge, normalizeSavedEdge, normalizeSavedNodeCollection, normalizeSavedNodeMap } from './edgeUtils';
 
 const dagreGraph = new dagre.graphlib.Graph();
 dagreGraph.setDefaultEdgeLabel(() => ({}));
@@ -21,14 +24,311 @@ const nodeHeight = 80;
 // Se reutiliza una sola consulta a /ptap para todos los elementos dinámicos.
 // No se crean ni mueven nodos: el dato se pinta sobre las formas ya existentes.
 const MACKENFLOC_SHAPE_TAGS = {
-  // Planta 1: tres tanques Mackenfloc confirmados por la API.
-  'forma-1787684914863-aek53': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T1',
-  'forma-1787684915758-97jih': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T2',
-  'forma-1787684917494-hn23j': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T3',
-  // Planta 2: dos tanques Mackenfloc confirmados por la API.
-  'forma-1787684915758-97jih-copy-1787686548169-906v3': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T1',
-  'forma-1787684915758-97jih-copy-1787686549046-0u9o4': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T2',
+  // Exact live yellow coagulant shapes currently in the saved district state.
+  'forma-1788988197049-fa9rk': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T1',
+  'forma-1788988196209-8q5qg': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T2',
+  'forma-1788988225120-3ngxj': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T3',
+  'forma-1789071196821-bz4z5': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T1',
+  'forma-1789071199125-uo8wb': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T2',
 };
+
+const PTAP_TAG_ALIASES = {
+  PTAP_CAPACIDAD_MACKENFLOC_P1_T1: ['PTAP_CAPACIDAD_MACKENFLOC_P1_T1'],
+  PTAP_CAPACIDAD_MACKENFLOC_P1_T2: ['PTAP_CAPACIDAD_MACKENFLOC_P1_T2'],
+  PTAP_CAPACIDAD_MACKENFLOC_P1_T3: ['PTAP_CAPACIDAD_MACKENFLOC_P1_T3'],
+  PTAP_CAPACIDAD_MACKENFLOC_P2_T1: ['PTAP_CAPACIDAD_MACKENFLOC_P2_T1'],
+  PTAP_CAPACIDAD_MACKENFLOC_P2_T2: ['PTAP_CAPACIDAD_MACKENFLOC_P2_T2'],
+  PTAP_CAUDAL_PARSHALL: ['PTAP_CAUDAL_PARSHALL'],
+  PTAP_CAUDAL_CREAGER: ['PTAP_CAUDAL_CREAGER'],
+  PTAP_CAUDAL_CHEMBE_ENTRADA: ['PTAP_CAUDAL_CHEMBE_ENTRADA', 'PTAP_CAUDAL_CHEMBE_SALIDA'],
+  PTAP_CAUDAL_CHEMBE_SALIDA: ['PTAP_CAUDAL_CHEMBE_SALIDA', 'PTAP_CAUDAL_CHEMBE_ENTRADA'],
+};
+
+const EXACT_TANK_TAG_BY_NODE_ID = {
+  'tanque-belen-aurora': 'NIVEL_AURORA',
+  'tanque-la-15': 'NIVEL_LA_15',
+  'tanque-la-29': 'NIVEL_LA_29',
+  'tanque-la-30': 'NIVEL_LA_30',
+  'tanque-zona-industrial': 'NIVEL_DE_ZONA_INDUSTRIAL',
+  'tanque-calucaima': 'NIVEL_CALUCAIMA',
+  'tanque-miramar': 'NIVEL_MIRAMAR',
+};
+
+const OPERATIONAL_SHAPE_TAGS = {
+  'forma-1788988194305-qxr6j': 'PTAP_CAUDAL_CREAGER',
+  'forma-1788988197857-hiv9w': 'PTAP_CAUDAL_PARSHALL',
+};
+
+// Additional operational mappings for shapes that represent PTAP intake points
+OPERATIONAL_SHAPE_TAGS['forma-1789388430360-lhtei'] = 'PTAP_CAUDAL_ENTRADA_24'; // COMBEIMA 1
+OPERATIONAL_SHAPE_TAGS['forma-1788988209832-lango'] = 'PTAP_CAUDAL_ENTRADA_27'; // COMBEIMA 2
+OPERATIONAL_SHAPE_TAGS['forma-1788988222632-8qpng'] = 'PTAP_CAUDAL_VALVULA_VRP'; // RETROLAVADO (fallback)
+OPERATIONAL_SHAPE_TAGS['forma-1789073487871-bxwfy'] = 'PTAP_CAUDAL_CHEMBE_ENTRADA'; // CHEMBE (explicit PTAP tag)
+
+const MACKENFLOC_LABEL_TAGS = {
+  'MACKENFLOC P1 T1': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T1',
+  'MACKENFLOC P1 T2': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T2',
+  'MACKENFLOC P1 T3': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T3',
+  'MACKENFLOC P2 T1': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T1',
+  'MACKENFLOC P2 T2': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T2',
+  'P1 T1': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T1',
+  'P1 T2': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T2',
+  'P1 T3': 'PTAP_CAPACIDAD_MACKENFLOC_P1_T3',
+  'P2 T1': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T1',
+  'P2 T2': 'PTAP_CAPACIDAD_MACKENFLOC_P2_T2',
+};
+
+const OPERATIONAL_LABEL_TAGS = {
+  'PARSHALL': 'PTAP_CAUDAL_PARSHALL',
+  'CREAGUER': 'PTAP_CAUDAL_CREAGER',
+  'CREAGER': 'PTAP_CAUDAL_CREAGER',
+};
+
+const MACKENFLOC_ID_TO_LABEL = {
+  'forma-1788988197049-fa9rk': 'MACKENFLOC P1 T1',
+  'forma-1788988196209-8q5qg': 'MACKENFLOC P1 T2',
+  'forma-1788988225120-3ngxj': 'MACKENFLOC P1 T3',
+  'forma-1789071196821-bz4z5': 'MACKENFLOC P2 T1',
+  'forma-1789071199125-uo8wb': 'MACKENFLOC P2 T2',
+};
+
+const STABLE_SHAPE_NAME_BY_ID = {
+  ...MACKENFLOC_ID_TO_LABEL,
+  'forma-1788988209832-lango': 'COMBEIMA 2',
+  'forma-1789388430360-lhtei': 'COMBEIMA 1',
+  'forma-1788988205128-xhpu4': 'COCORA',
+  'forma-1788988222632-8qpng': 'RETROLAVADO',
+  'forma-1789073487871-bxwfy': 'CHEMBE',
+  'forma-1788988197857-hiv9w': 'PARSHALL',
+  'forma-1788988194305-qxr6j': 'CREAGER',
+  'forma-1788988225880-frv4k': 'BOMBEO',
+};
+
+function normalizeMetricLabelKey(value) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeComparableText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildComparableAliases(value) {
+  const aliases = new Set();
+  const raw = String(value || '').trim();
+  if (!raw) return aliases;
+
+  const normalized = normalizeComparableText(raw);
+  if (!normalized) return aliases;
+
+  aliases.add(normalized);
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < words.length; i += 1) {
+    for (let j = i + 1; j <= words.length; j += 1) {
+      const chunk = words.slice(i, j).join(' ');
+      if (chunk) aliases.add(chunk);
+    }
+  }
+
+  for (const alias of [...aliases]) {
+    const stripped = alias.replace(/^(nivel|nive|de|del|la|el|los|las)\s+/i, '').trim();
+    if (stripped && stripped !== alias) aliases.add(stripped);
+  }
+
+  return aliases;
+}
+
+function textMatchesComparableAlias(sourceValue, targetValue) {
+  const sourceAliases = buildComparableAliases(sourceValue);
+  const targetAliases = buildComparableAliases(targetValue);
+
+  for (const sourceAlias of sourceAliases) {
+    for (const targetAlias of targetAliases) {
+      if (!sourceAlias || !targetAlias) continue;
+      if (sourceAlias === targetAlias || sourceAlias.includes(targetAlias) || targetAlias.includes(sourceAlias)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function getStableRuntimeShapeName(nodeData = {}) {
+  const safeNodeData = nodeData && typeof nodeData === 'object' ? nodeData : {};
+  const rawNodeId = String(safeNodeData.id || '').trim();
+  if (rawNodeId && STABLE_SHAPE_NAME_BY_ID[rawNodeId]) return STABLE_SHAPE_NAME_BY_ID[rawNodeId];
+  const fallback = [safeNodeData.customName, safeNodeData.label, safeNodeData.display_name, safeNodeData.nombre, safeNodeData.apiName, safeNodeData.originalName]
+    .filter((value) => value != null && String(value).trim())
+    .map((value) => String(value).trim())
+    .find(Boolean);
+  return fallback || 'Texto / Forma';
+}
+
+function getExactMackenflocTagForNode(node, fallbackNodeData = {}, metricMap = null) {
+  const rawNodeId = node?.id ? String(node.id) : '';
+  if (rawNodeId && MACKENFLOC_SHAPE_TAGS[rawNodeId]) {
+    return MACKENFLOC_SHAPE_TAGS[rawNodeId];
+  }
+  if (rawNodeId && OPERATIONAL_SHAPE_TAGS[rawNodeId]) {
+    return OPERATIONAL_SHAPE_TAGS[rawNodeId];
+  }
+
+  const source = fallbackNodeData && typeof fallbackNodeData === 'object' ? fallbackNodeData : {};
+  const label = [source.label, source.display_name, source.nombre, source.customName, source.apiName, source.originalName, node?.label]
+    .filter((value) => value != null && String(value).trim())
+    .map((value) => String(value).trim())
+  ;
+
+  const labelText = label.join(' ');
+
+  if (!labelText) return null;
+  const normalized = normalizeMetricLabelKey(labelText);
+  for (const [tag, candidateAliases] of Object.entries(PTAP_TAG_ALIASES)) {
+    if (!candidateAliases || !candidateAliases.length) continue;
+    for (const alias of candidateAliases) {
+      if (!alias) continue;
+      const aliasText = alias.replace(/^PTAP_/, '').replace(/_/g, ' ');
+      const tagText = tag.replace(/^PTAP_/, '').replace(/_/g, ' ');
+      if (normalized.includes(tagText) || normalized.includes(aliasText) || tagText.includes(normalized) || aliasText.includes(normalized)) {
+        if (metricMap && Object.prototype.hasOwnProperty.call(metricMap, tag)) return tag;
+      }
+    }
+  }
+
+  const directByName = Object.keys(metricMap || {}).find((tag) => {
+    if (!tag || !labelText) return false;
+    const labelKey = normalizeMetricLabelKey(labelText);
+    const tagKey = normalizeMetricLabelKey(tag);
+    return tagKey.includes(labelKey) || labelKey.includes(tagKey);
+  });
+
+  if (directByName) return directByName;
+  return null;
+}
+
+function resolveLivePtapTagForNode(node, metricMap = null, preferredTag = null) {
+  const nodeData = (node && node.data && node.data.nodeData) ? node.data.nodeData : (node && node.data ? node.data : {});
+  const rawNodeId = (node && node.id) ? String(node.id) : (nodeData && nodeData.id ? String(nodeData.id) : '');
+
+  if (preferredTag && metricMap && Object.prototype.hasOwnProperty.call(metricMap, preferredTag)) {
+    return preferredTag;
+  }
+
+  if (rawNodeId && MACKENFLOC_SHAPE_TAGS[rawNodeId]) {
+    return MACKENFLOC_SHAPE_TAGS[rawNodeId];
+  }
+  if (rawNodeId && OPERATIONAL_SHAPE_TAGS[rawNodeId]) {
+    return OPERATIONAL_SHAPE_TAGS[rawNodeId];
+  }
+
+  const labels = [
+    nodeData?.label,
+    nodeData?.display_name,
+    nodeData?.nombre,
+    nodeData?.customName,
+    nodeData?.apiName,
+    nodeData?.originalName,
+    node?.label,
+    rawNodeId,
+  ].filter((value) => value != null && String(value).trim()).map((value) => String(value).trim());
+
+  const combinedLabel = labels.join(' ');
+  if (combinedLabel) {
+    const normalizedLabel = normalizeMetricLabelKey(combinedLabel);
+    const directByLabel = Object.keys(metricMap || {}).find((tag) => {
+      const tagKey = normalizeMetricLabelKey(tag);
+      return tagKey.includes(normalizedLabel) || normalizedLabel.includes(tagKey);
+    });
+    if (directByLabel) return directByLabel;
+
+    const explicitLabelMap = { ...MACKENFLOC_LABEL_TAGS, ...OPERATIONAL_LABEL_TAGS };
+    for (const [labelKey, tag] of Object.entries(explicitLabelMap)) {
+      const labelNorm = normalizeMetricLabelKey(labelKey);
+      if (labelNorm && (normalizedLabel.includes(labelNorm) || labelNorm.includes(normalizedLabel))) {
+        return tag;
+      }
+    }
+  }
+
+  const fromAliases = Object.entries(PTAP_TAG_ALIASES).find(([tag, aliases]) => {
+    if (!aliases || !aliases.length) return false;
+    const labelNorm = normalizeMetricLabelKey(combinedLabel || '');
+    const anyMatch = aliases.some((alias) => {
+      const aliasText = normalizeMetricLabelKey(alias || '');
+      return !!labelNorm && !!aliasText && (labelNorm.includes(aliasText) || aliasText.includes(labelNorm));
+    });
+    return anyMatch && metricMap && Object.prototype.hasOwnProperty.call(metricMap, tag);
+  });
+
+  if (fromAliases) return fromAliases[0];
+
+  return preferredTag || null;
+}
+
+function findMetricVariableForNode(node, metricMap) {
+  if (!node || !metricMap) return { tag: null, variable: null };
+
+  const nodeData = node?.data?.nodeData || node?.data || {};
+  const directTag = getExactMackenflocTagForNode(node, nodeData, metricMap) || OPERATIONAL_SHAPE_TAGS[node?.id || nodeData?.id || ''] || null;
+  const candidates = [];
+
+  if (directTag) candidates.push(directTag);
+  if (node?.id) candidates.push(String(node.id));
+  if (nodeData?.id) candidates.push(String(nodeData.id));
+  if (nodeData?.tag) candidates.push(String(nodeData.tag));
+  if (nodeData?.apiName) candidates.push(String(nodeData.apiName));
+  if (nodeData?.originalName) candidates.push(String(nodeData.originalName));
+  if (nodeData?.display_name) candidates.push(String(nodeData.display_name));
+  if (nodeData?.nombre) candidates.push(String(nodeData.nombre));
+  if (nodeData?.label) candidates.push(String(nodeData.label));
+  if (nodeData?.customName) candidates.push(String(nodeData.customName));
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const trimmed = String(candidate).trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    if (Object.prototype.hasOwnProperty.call(metricMap, trimmed)) {
+      return { tag: trimmed, variable: metricMap[trimmed] };
+    }
+  }
+
+  const labelText = candidates
+    .filter((value) => value && String(value).trim())
+    .map((value) => String(value).trim())
+    .join(' ');
+
+  if (!labelText) return { tag: null, variable: null };
+
+  const matchedTag = resolveLivePtapTagForNode(node, metricMap, directTag);
+  if (matchedTag && metricMap[matchedTag]) {
+    return { tag: matchedTag, variable: metricMap[matchedTag] };
+  }
+
+  const normalizedLabel = normalizeMetricLabelKey(labelText);
+  const exactAlias = Object.keys(metricMap).find((tag) => {
+    const tagKey = normalizeMetricLabelKey(tag);
+    return tagKey.includes(normalizedLabel) || normalizedLabel.includes(tagKey);
+  });
+
+  if (exactAlias) {
+    return { tag: exactAlias, variable: metricMap[exactAlias] };
+  }
+
+  return { tag: null, variable: null };
+}
 
 let _ptapMetricsMap = null;
 let _ptapMetricsLoading = null;
@@ -74,11 +374,52 @@ function parseMetricNumber(value) {
   if (value == null || value === '') return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
 
-  const clean = String(value).trim();
+  const clean = String(value).trim().replace(/\s+/g, '');
   if (!clean) return null;
 
-  const normalized = clean.replace(/\s+/g, '').replace(/\./g, '').replace(',', '.');
-  const parsed = Number(normalized);
+  // Accept both US (1,234.56) and EU (1.234,56 / 688,8125) formats.
+  const sign = clean.startsWith('-') ? '-' : '';
+  const unsigned = sign ? clean.slice(1) : clean;
+
+  if (!/^[0-9.,+-]+$/.test(unsigned)) {
+    const numeric = Number(clean);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  const hasComma = unsigned.includes(',');
+  const hasDot = unsigned.includes('.');
+
+  if (!hasComma && !hasDot) {
+    const numeric = Number(unsigned);
+    return Number.isFinite(numeric) ? (sign ? -numeric : numeric) : null;
+  }
+
+  if (hasComma && hasDot) {
+    const lastComma = unsigned.lastIndexOf(',');
+    const lastDot = unsigned.lastIndexOf('.');
+    const decimalIndex = Math.max(lastComma, lastDot);
+    const decimalSeparator = decimalIndex === lastComma ? ',' : '.';
+    const integerPart = unsigned.slice(0, decimalIndex).replace(/[.,]/g, '');
+    const decimalPart = unsigned.slice(decimalIndex + 1).replace(/[.,]/g, '');
+    const normalized = decimalPart ? `${integerPart}.${decimalPart}` : integerPart;
+    const parsed = Number(`${sign}${normalized}`);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  if (hasComma) {
+    const decimalIndex = unsigned.lastIndexOf(',');
+    const integerPart = unsigned.slice(0, decimalIndex).replace(/\./g, '').replace(/,/g, '');
+    const decimalPart = unsigned.slice(decimalIndex + 1).replace(/,/g, '');
+    const normalized = decimalPart ? `${integerPart}.${decimalPart}` : integerPart;
+    const parsed = Number(`${sign}${normalized}`);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  const decimalIndex = unsigned.lastIndexOf('.');
+  const integerPart = unsigned.slice(0, decimalIndex).replace(/,/g, '');
+  const decimalPart = unsigned.slice(decimalIndex + 1).replace(/,/g, '');
+  const normalized = decimalPart ? `${integerPart}.${decimalPart}` : integerPart;
+  const parsed = Number(`${sign}${normalized}`);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -144,6 +485,66 @@ function sanitizePosition(position = {}) {
   };
 }
 
+function stripRuntimeTelemetry(data = {}) {
+  const source = data && typeof data === 'object' ? data : {};
+  const cleaned = { ...source };
+  const telemetryKeys = [
+    'ptapMetricText', 'ptapMetricLabel', 'ptapMetricAbove', 'ptapMetricRaw',
+    'metricText', 'metricLabel', 'metricAbove', 'metricRaw',
+  ];
+  for (const key of telemetryKeys) {
+    if (Object.prototype.hasOwnProperty.call(cleaned, key)) {
+      delete cleaned[key];
+    }
+  }
+  return cleaned;
+}
+
+function preserveLiveMetricValues(current = {}, incoming = {}) {
+  const currentData = stripRuntimeTelemetry(current && typeof current === 'object' ? current : {});
+  const incomingData = stripRuntimeTelemetry(incoming && typeof incoming === 'object' ? incoming : {});
+  const merged = { ...currentData, ...incomingData };
+  const metricKeys = [
+    'valor_m', 'nivel', 'porcentaje', 'porcentaje_capacidad', 'porcentaje_api',
+    'capacidad_actual_m3', 'capacidad_maxima_m3', 'volumen_restante_m3',
+    'altura_rebose', 'altura_rebose_calibrada', 'altura_rebose_m',
+    'manual_porcentaje', 'manual_rebose_override', 'tag', 'display_name', 'nombre', 'color', 'customColor'
+  ];
+
+  for (const key of metricKeys) {
+    if (incomingData[key] == null || incomingData[key] === '' || incomingData[key] === 'null') {
+      if (currentData[key] != null && currentData[key] !== '' && currentData[key] !== 'null') {
+        merged[key] = currentData[key];
+      }
+    }
+  }
+
+  const isPositiveFinite = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
+  const keepCurrentSizeIfAutoFallback = (key) => {
+    const currentValue = currentData[key];
+    const incomingValue = incomingData[key];
+    if (!isPositiveFinite(currentValue) || !isPositiveFinite(incomingValue)) return;
+    const currentNum = Number(currentValue);
+    const incomingNum = Number(incomingValue);
+    const autoFallback = key === 'width' ? 120 : 68;
+    const isLikelyAutoRehydration = incomingNum <= autoFallback && currentNum > autoFallback;
+    if (isLikelyAutoRehydration) {
+      merged[key] = currentNum;
+    }
+  };
+
+  keepCurrentSizeIfAutoFallback('width');
+  keepCurrentSizeIfAutoFallback('height');
+
+  if ((incomingData.customName == null || incomingData.customName === '') && (currentData.customName != null && currentData.customName !== '')) {
+    merged.customName = currentData.customName;
+  }
+  if ((incomingData.label == null || incomingData.label === '') && (currentData.label != null && currentData.label !== '')) {
+    merged.label = currentData.label;
+  }
+  return merged;
+}
+
 function sanitizePersistedNodeVisual(entry = {}) {
   const source = entry && typeof entry === 'object' ? entry : {};
   const safeCustomName = typeof source.customName === 'string' ? source.customName : (typeof source.label === 'string' ? source.label : '');
@@ -174,9 +575,68 @@ function sanitizePersistedNodeVisual(entry = {}) {
     volumen_restante_m3: source.volumen_restante_m3 ?? null,
     altura_rebose: source.altura_rebose ?? source.altura_rebose_m ?? null,
     altura_rebose_calibrada: source.altura_rebose_calibrada ?? source.altura_rebose_m ?? null,
+    // manual override fields (persist minimal config only)
+    manual_porcentaje: (source.manual_porcentaje != null) ? source.manual_porcentaje : null,
+    manual_rebose_override: (source.manual_rebose_override != null) ? source.manual_rebose_override : null,
     tag: source.tag ?? null,
     display_name: source.display_name ?? source.nombre ?? source.label ?? null,
   };
+}
+
+const HISTORY_RUNTIME_KEYS = new Set([
+  'valor_m', 'nivel', 'porcentaje', 'porcentaje_capacidad', 'porcentaje_api',
+  'capacidad_actual_m3', 'capacidad_maxima_m3', 'volumen_restante_m3',
+  'altura_rebose', 'altura_rebose_calibrada', 'altura_rebose_m',
+  'manual_porcentaje', 'manual_rebose_override', 'tag', 'display_name', 'nombre', 'apiName', 'originalName',
+  'fecha_hora', 'ptapMetricText', 'ptapMetricLabel', 'ptapMetricAbove', 'ptapMetricRaw',
+  'metricText', 'metricLabel', 'metricAbove', 'metricRaw', 'updated_at', '_updatedAt', 'updatedAt'
+]);
+
+function stripHistoryRuntimeFields(entry = {}) {
+  const copy = { ...(entry && typeof entry === 'object' ? entry : {}) };
+  for (const key of HISTORY_RUNTIME_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(copy, key)) delete copy[key];
+  }
+  return copy;
+}
+
+function buildDesignHistorySnapshot(state = {}) {
+  const source = state && typeof state === 'object' ? state : {};
+  const rawNodes = source.nodes && typeof source.nodes === 'object' ? source.nodes : {};
+  const nodes = {};
+  for (const [id, entry] of Object.entries(rawNodes)) {
+    const cleaned = stripHistoryRuntimeFields(sanitizePersistedNodeVisual(entry || {}));
+    nodes[id] = {
+      ...cleaned,
+      id: String(id),
+      x: Number.isFinite(Number(cleaned.x)) ? Number(cleaned.x) : 0,
+      y: Number.isFinite(Number(cleaned.y)) ? Number(cleaned.y) : 0,
+      width: Number.isFinite(Number(cleaned.width)) ? Number(cleaned.width) : null,
+      height: Number.isFinite(Number(cleaned.height)) ? Number(cleaned.height) : null,
+      rotation: Number.isFinite(Number(cleaned.rotation)) ? Number(cleaned.rotation) : 0,
+      label: String(cleaned.label || id || 'Sin nombre'),
+    };
+  }
+  const edges = Array.isArray(source.edges)
+    ? source.edges.map((edge) => {
+        const safe = edge && typeof edge === 'object' ? { ...edge } : {};
+        if (safe.data && typeof safe.data === 'object') {
+          const nextData = { ...safe.data };
+          for (const key of HISTORY_RUNTIME_KEYS) delete nextData[key];
+          safe.data = nextData;
+        }
+        return safe;
+      })
+    : [];
+  return { nodes, edges };
+}
+
+function snapshotDesignEquals(a = {}, b = {}) {
+  try {
+    return JSON.stringify(buildDesignHistorySnapshot(a)) === JSON.stringify(buildDesignHistorySnapshot(b));
+  } catch (e) {
+    return false;
+  }
 }
 
 function getAutoShapeSize(label = '', currentWidth = 120, currentHeight = 68) {
@@ -193,9 +653,9 @@ function getAutoShapeSize(label = '', currentWidth = 120, currentHeight = 68) {
 }
 
 const FLOW_METRIC_CONFIG = {
-  'ptap-chembe': { service: 'ptap', tag: 'PTAP_CAUDAL_CAY_16', defaultUnit: 'L/s' },
-  'ptap-pola-1': { service: 'captacion', tag: 'CAPTACION_CAUDAL_SALIDA_24', defaultUnit: 'L/s' },
-  'ptap-pola-2': { service: 'captacion', tag: 'CAPTACION_CAUDAL_SALIDA_27', defaultUnit: 'L/s' },
+  'ptap-chembe': { service: 'ptap', tag: 'PTAP_CAUDAL_CHEMBE_ENTRADA', defaultUnit: 'L/s' },
+  'ptap-pola-1': { service: 'ptap', tag: 'PTAP_CAUDAL_ENTRADA_24', defaultUnit: 'L/s' },
+  'ptap-pola-2': { service: 'ptap', tag: 'PTAP_CAUDAL_ENTRADA_27', defaultUnit: 'L/s' },
 };
 
 function getMetricConfigForNodeId(nodeId) {
@@ -248,6 +708,55 @@ async function loadFlowMetricForNodeId(nodeId) {
   }
 }
 
+function normalizeCalibrationKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isZeroPercentRejectedForTank(source = {}, value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric !== 0) return false;
+
+  const candidates = [
+    source.id,
+    source.tag,
+    source.apiTag,
+    source.apiName,
+    source.originalName,
+    source.nombre,
+    source.display_name,
+    source.label,
+    source.name,
+  ].filter(Boolean).map((entry) => String(entry).trim());
+
+  if (!candidates.length) return false;
+
+  const normalized = candidates
+    .join(' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const matchesTarget = /(calucaima|miramar|zona industrial)/.test(normalized) || /nive.*(calucaima|miramar|zona industrial)/.test(normalized);
+  if (!matchesTarget) return false;
+
+  const nivel = Number.isFinite(Number(source.valor_m)) ? Number(source.valor_m)
+    : (Number.isFinite(Number(source.nivel)) ? Number(source.nivel) : null);
+  const altura = Number.isFinite(Number(source.altura_rebose_calibrada)) ? Number(source.altura_rebose_calibrada)
+    : (Number.isFinite(Number(source.altura_rebose_m)) ? Number(source.altura_rebose_m)
+      : (Number.isFinite(Number(source.altura_rebose)) ? Number(source.altura_rebose) : null));
+
+  return nivel != null && nivel > 0 && altura != null && altura > 0;
+}
+
 function getCalibratedReboseHeight(source = {}) {
   const candidates = [
     source.tag,
@@ -257,13 +766,22 @@ function getCalibratedReboseHeight(source = {}) {
     source.originalName,
     source.label,
     source.name,
+    source.id,
   ].filter(Boolean);
 
+  const calibrationEntries = Object.entries(ALTURAS_REBOSE_CALIBRADAS || {});
   for (const candidate of candidates) {
-    const normalized = String(candidate).trim().toUpperCase();
-    if (normalized === 'CALUCAIMA') return 5.02;
-    if (normalized === 'ZONA INDUSTRIAL') return 16.6;
-    if (normalized === 'MIRAMAR') return 7.56;
+    const normalized = normalizeCalibrationKey(candidate);
+    if (!normalized) continue;
+
+    for (const [label, value] of calibrationEntries) {
+      const key = normalizeCalibrationKey(label);
+      if (!key) continue;
+      if (normalized === key || normalized.includes(key) || key.includes(normalized)) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric) && numeric > 0) return numeric;
+      }
+    }
   }
 
   return null;
@@ -274,66 +792,116 @@ function enrichTankNodeMetrics(data = {}) {
   const nivel = source.valor_m ?? source.nivel ?? source.valor ?? source.level ?? source.level_m ?? null;
   const nivelNumber = Number.isFinite(Number(nivel)) ? Number(nivel) : null;
 
-  // La API IBAL puede devolver altura_rebose_m (con _m) o altura_rebose.
-  // Cuando falte esa altura para los tanques calibrados, usar la referencia matemática del catálogo.
+  // Prefer explicit calibrated height fields when present so each tanque uses
+  // its own catalog calibration rather than a generic fallback.
   const calibratedFallbackHeight = getCalibratedReboseHeight(source);
-  const resolvedHeight = source.altura_rebose ?? source.altura_rebose_m ?? source.alturaRebose ?? calibratedFallbackHeight ?? null;
+  const resolvedHeight = source.altura_rebose_calibrada ?? source.altura_rebose ?? source.altura_rebose_m ?? source.alturaRebose ?? calibratedFallbackHeight ?? null;
   const heightNumber = resolvedHeight != null && Number.isFinite(Number(resolvedHeight)) ? Number(resolvedHeight) : null;
 
-  // La API IBAL devuelve porcentaje_capacidad (no porcentaje).
-  // También acepta porcentaje_api o porcentaje directo como fallback.
-  const ibalPct = Number.isFinite(Number(source.porcentaje_capacidad)) ? Number(source.porcentaje_capacidad)
-    : (Number.isFinite(Number(source.porcentaje_api)) ? Number(source.porcentaje_api)
-      : (Number.isFinite(Number(source.porcentaje)) ? Number(source.porcentaje) : null));
+  const usableExplicitValue = (value) => {
+    if (value === null || value === undefined || value === '') return false;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return false;
+    if (numeric !== 0) return true;
+    return !isZeroPercentRejectedForTank(source, value);
+  };
 
-  // calidad=DUDOSA o sin_datos=true → no mostrar porcentaje (Sin datos)
+  const ibalPct = usableExplicitValue(source.porcentaje_capacidad) ? Number(source.porcentaje_capacidad)
+    : (usableExplicitValue(source.porcentaje_api) ? Number(source.porcentaje_api)
+      : (usableExplicitValue(source.porcentaje) ? Number(source.porcentaje) : null));
+
+  const manualPct = Number.isFinite(Number(source.manual_porcentaje)) ? Number(source.manual_porcentaje)
+    : (Number.isFinite(Number(source.manualPorcentaje)) ? Number(source.manualPorcentaje) : null);
+  const normalizedManualPct = manualPct === 0 && isZeroPercentRejectedForTank(source, manualPct) ? null : manualPct;
+  const manualRebose = Number.isFinite(Number(source.manual_rebose_override)) ? Number(source.manual_rebose_override)
+    : (Number.isFinite(Number(source.manualReboseOverride)) ? Number(source.manualReboseOverride) : null);
+
   const isBadQuality = source.calidad === 'DUDOSA' || source.sin_datos === true;
+  const hasExplicitPercentage = ibalPct != null || normalizedManualPct != null;
   let percentage = null;
-  if (!isBadQuality) {
-    if (ibalPct != null) {
-      percentage = ibalPct;
-    } else if (nivelNumber != null && heightNumber != null && heightNumber > 0) {
-      // Calcular dinámicamente desde valor_m y altura de rebose.
-      percentage = calculateDisplayPorcentaje({ ...source, valor_m: nivelNumber, altura_rebose: heightNumber });
+  if (normalizedManualPct != null) {
+    percentage = normalizedManualPct;
+  } else if (ibalPct != null) {
+    percentage = ibalPct;
+  } else if (!isBadQuality || hasExplicitPercentage) {
+    // The API can still carry a valid percentage even when the quality is marked as DUDOSA.
+    // Only suppress automatic math when the source is actually missing the required values.
+    if (nivelNumber != null && heightNumber != null && heightNumber > 0) {
+      try {
+        const computed = calculateDisplayPorcentaje(nivelNumber, heightNumber);
+        if (computed != null) percentage = computed;
+      } catch (e) { /* ignore compute errors */ }
     }
   }
 
+  const finalNivel = nivelNumber ?? (source.valor_m != null ? Number(source.valor_m) : null);
+  const finalPercentage = percentage ?? (usableExplicitValue(source.porcentaje) ? Number(source.porcentaje) : null);
+
   return {
     ...source,
-    valor_m: nivelNumber,
-    nivel: nivelNumber,
-    altura_rebose: heightNumber ?? source.altura_rebose_m ?? null,
-    altura_rebose_calibrada: heightNumber ?? source.altura_rebose_m ?? null,
-    // Normalizar campos de capacidad desde la API
-    capacidad_actual_m3: source.capacidad_actual_m3 ?? source.capacidad_m3 ?? null,
-    porcentaje: percentage,
+    valor_m: finalNivel,
+    nivel: finalNivel,
+    porcentaje: finalPercentage,
+    porcentaje_capacidad: finalPercentage ?? source.porcentaje_capacidad ?? null,
+    altura_rebose: heightNumber ?? source.altura_rebose ?? source.altura_rebose_m ?? null,
+    altura_rebose_calibrada: heightNumber ?? source.altura_rebose_calibrada ?? source.altura_rebose_m ?? null,
+    manual_porcentaje: manualPct ?? source.manual_porcentaje ?? null,
+    manual_rebose_override: manualRebose ?? source.manual_rebose_override ?? null,
+    customColor: source.customColor || source.color || '',
+    shapeType: source.shapeType || 'box',
+    position: sanitizePosition(source.position || {}),
+    rotation: Number.isFinite(Number(source.rotation)) ? Number(source.rotation) : 0,
+    label: source.label || source.display_name || source.nombre || source.apiName || source.originalName || source.tag || 'Sin nombre',
   };
 }
 
-function ensureNodeData(node) {
-  const source = node?.data?.nodeData || node?.data || {};
-  const resolvedId = node?.id ?? source.id ?? source.nodeId ?? 'unknown-node';
-  const resolvedType = source.type ?? node?.type ?? 'tank';
-  const originalName = source.apiName || source.originalName || source.tag || source.display_name || source.nombre || source.label || node?.label || resolvedId || 'Sin nombre';
-  const customName = source.customName || node?.customName || source.diagramName || source.displayName || '';
-  const widthValue = source.width != null ? toFiniteNumber(source.width, 170) : (node?.width != null ? toFiniteNumber(node.width, 170) : null);
-  const heightValue = source.height != null ? toFiniteNumber(source.height, 100) : (node?.height != null ? toFiniteNumber(node.height, 100) : null);
-  const enrichedSource = resolvedType === 'tank' ? enrichTankNodeMetrics(source) : source;
-  return {
-    ...enrichedSource,
-    id: resolvedId,
-    type: resolvedType,
-    apiName: source.apiName || source.originalName || source.tag || originalName,
-    originalName: source.originalName || source.apiName || source.tag || originalName,
-    customName,
-    label: customName || source.label || node?.label || originalName,
-    color: source.color || source.customColor || '',
+function normalizeDiagramNodeEntries(rawNodes) {
+  if (Array.isArray(rawNodes)) return rawNodes.filter((entry) => entry && typeof entry === 'object');
+  if (rawNodes && typeof rawNodes === 'object') return Object.values(rawNodes).filter((entry) => entry && typeof entry === 'object');
+  return [];
+}
+
+function normalizeDiagramEdgeEntries(rawEdges) {
+  if (Array.isArray(rawEdges)) return rawEdges.filter((edge) => edge && typeof edge === 'object');
+  if (rawEdges && typeof rawEdges === 'object') return Object.values(rawEdges).filter((edge) => edge && typeof edge === 'object');
+  return [];
+}
+
+function ensureNodeData({ id, type = 'tank', label = '', position = {}, data = {} } = {}) {
+  const source = data && typeof data === 'object' ? { ...data } : {};
+  const nodeId = id ?? source.id ?? label ?? 'node';
+  const nodeLabel = typeof label === 'string' && label.trim() ? label : (typeof source.label === 'string' ? source.label : nodeId);
+  const normalizedPosition = sanitizePosition(position || source.position || {});
+  const normalized = {
+    ...source,
+    id: nodeId,
+    type: type || source.type || 'tank',
+    label: nodeLabel,
+    customName: source.customName || source.diagramName || source.displayName || '',
+    display_name: source.display_name ?? source.nombre ?? nodeLabel,
+    nombre: source.nombre ?? source.display_name ?? nodeLabel,
+    apiName: source.apiName || source.originalName || source.tag || nodeLabel,
+    originalName: source.originalName || source.apiName || source.tag || nodeLabel,
+    tag: source.tag ?? source.id ?? nodeId,
+    width: Number.isFinite(Number(source.width)) ? Number(source.width) : null,
+    height: Number.isFinite(Number(source.height)) ? Number(source.height) : null,
+    rotation: Number.isFinite(Number(source.rotation)) ? Number(source.rotation) : 0,
     customColor: source.customColor || source.color || '',
+    color: source.color || source.customColor || '',
     shapeType: source.shapeType || 'box',
-    width: widthValue,
-    height: heightValue,
-    position: sanitizePosition(node?.position || source.position),
+    position: normalizedPosition,
   };
+  try {
+    // TRACE: diagnostic for single node to find who mutates size during reload
+    if (typeof window !== 'undefined' && window.__TRACE_NODE_ID === undefined) {
+      // keep disabled by default; tests will set window.__TRACE_NODE_ID to enable
+    }
+    if (typeof window !== 'undefined' && window.__TRACE_NODE_ID && String(window.__TRACE_NODE_ID) === String(id)) {
+      try { console.debug('[TRACE] ensureNodeData for', id, 'source.width=', source.width, 'source.height=', source.height, '-> normalized.width=', normalized.width, 'normalized.height=', normalized.height); } catch (e) {}
+    }
+  } catch (e) {}
+
+  return normalized;
 }
 
 function getLayoutedElements(nodes, edges, direction = 'LR') {
@@ -367,11 +935,11 @@ function getLayoutedElements(nodes, edges, direction = 'LR') {
 
 // Wrapper node components for React Flow
 function FlowTankNode(props) {
-  const { data, ...rest } = props || {};
-  const { InputProps, updateNodeDimensions, onNodeMouseDown, ...safeProps } = rest || {};
+  const { data } = props || {};
   const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(getNodeDisplayName({ data: nodeData }));
+  const inputRef = useRef(null);
   const tankWidth = (nodeData?.width != null && Number.isFinite(Number(nodeData.width)) && Number(nodeData.width) > 0) ? Number(nodeData.width) : 160;
   const tankHeight = (nodeData?.height != null && Number.isFinite(Number(nodeData.height)) && Number(nodeData.height) > 0) ? Number(nodeData.height) : 200;
   const tankScale = Math.max(0.45, Math.min(1.4, Math.min(tankWidth / 160, tankHeight / 200) || 1));
@@ -383,11 +951,10 @@ function FlowTankNode(props) {
   }, [nodeData?.customName, nodeData?.label, nodeData?.display_name, nodeData?.nombre, nodeData?.apiName]);
 
   useEffect(() => {
-    if (data && data.openEditor) {
-      setIsEditing(true);
-      try { if (typeof data.onEditorShown === 'function') data.onEditorShown(nodeData?.id || data?.id); } catch (e) {}
+    if (isEditing) {
+      try { if (inputRef && inputRef.current && typeof inputRef.current.focus === 'function') { inputRef.current.focus(); inputRef.current.select && inputRef.current.select(); } } catch (e) {}
     }
-  }, [data?.openEditor]);
+  }, [isEditing]);
 
   const labelText = getNodeDisplayName({ data: nodeData });
   const isPending = Boolean(data && data.pendingConnect);
@@ -415,11 +982,14 @@ function FlowTankNode(props) {
     }
     if (onSelect) onSelect(nodeData.id);
   };
+  // Diagnostic: mark when node wrapper's onSelect is invoked
+  try { if (typeof window !== 'undefined') { /* noop to keep tool happy */ } } catch (e) {}
   const beginEdit = (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     setDraft(labelText);
     setIsEditing(true);
+    try { if (typeof window !== 'undefined') window.__LAST_BEGIN_EDIT = nodeData?.id || data?.id || null; } catch (e) {}
   };
 
   const saveLabel = () => {
@@ -464,7 +1034,7 @@ function FlowTankNode(props) {
   const bottomRightHandle = rotatePoint(innerOffsetX + 92 * tankScale, innerOffsetY + 114 * tankScale, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
       {/* Handles — solo visibles en editMode */}
       <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
@@ -490,6 +1060,9 @@ function FlowTankNode(props) {
               valor_m: (nodeData && nodeData.valor_m != null) ? nodeData.valor_m : (data && data.valor_m != null ? data.valor_m : null),
               nivel:   (nodeData && nodeData.nivel   != null) ? nodeData.nivel   : (data && data.nivel   != null ? data.nivel   : null),
               porcentaje: (nodeData && nodeData.porcentaje != null) ? nodeData.porcentaje : (data && data.porcentaje != null ? data.porcentaje : null),
+              // keep id and attach manual pct handler for the TankNode UI
+              id: nodeData && nodeData.id ? nodeData.id : (data && data.id ? data.id : null),
+              onManualPctChange: (p) => { try { setNodeManualPercentage((nodeData && nodeData.id) || (data && data.id), p); } catch (e) {} },
             };
             return (
               <g transform={transform}>
@@ -510,6 +1083,7 @@ function FlowTankNode(props) {
               <div className="nodrag" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <input
                   autoFocus
+                  ref={inputRef}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(event) => {
@@ -534,7 +1108,6 @@ function FlowTankNode(props) {
               fill="#0b2447"
               textAnchor="middle"
               dominantBaseline="hanging"
-              onClick={beginEdit} onDoubleClick={beginEdit}
               style={{ cursor: 'pointer' }}
             >{labelText}</text>
           )}
@@ -546,11 +1119,11 @@ function FlowTankNode(props) {
 
 
 function FlowPlantNode(props) {
-  const { data, ...rest } = props || {};
-  const { InputProps, updateNodeDimensions, onNodeMouseDown, ...safeProps } = rest || {};
+  const { data } = props || {};
   const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(getNodeDisplayName({ data: nodeData }));
+  const inputRef = useRef(null);
   const customColor = nodeData?.customColor || nodeData?.color;
 
   useEffect(() => {
@@ -579,6 +1152,7 @@ function FlowPlantNode(props) {
       }
       return;
     }
+    try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('FLOWPLANTNODE_HANDLECLICK:' + (nodeData && nodeData.id)); } } catch (e) {}
     if (onSelect) onSelect(nodeData.id);
   };
   const isPending = Boolean(data && data.pendingConnect);
@@ -589,6 +1163,7 @@ function FlowPlantNode(props) {
     ev.stopPropagation();
     setDraft(labelText);
     setIsEditing(true);
+    try { if (typeof window !== 'undefined') window.__LAST_BEGIN_EDIT = nodeData?.id || data?.id || null; } catch (e) {}
   };
 
   useEffect(() => {
@@ -611,13 +1186,6 @@ function FlowPlantNode(props) {
 
     return () => { mounted = false; };
   }, [nodeData?.id, nodeData?.nodeId, data?.id, data?.nodeId]);
-
-  useEffect(() => {
-    if (data && data.openEditor) {
-      setIsEditing(true);
-      try { if (typeof data.onEditorShown === 'function') data.onEditorShown(nodeData?.id || data?.id); } catch (e) {}
-    }
-  }, [data?.openEditor]);
 
   const saveLabel = () => {
     const clean = (draft || '').replace(/\s+/g, ' ').trim();
@@ -652,7 +1220,7 @@ function FlowPlantNode(props) {
   const bottomHandle = rotatePoint(cx, h - 14, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
@@ -673,6 +1241,7 @@ function FlowPlantNode(props) {
                 <div className="nodrag" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <input
                     autoFocus
+                    ref={inputRef}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(event) => {
@@ -753,7 +1322,7 @@ function FlowPlantNode(props) {
                   </div>
                 ) : null}
                 <rect x={-90} y={-22} width={180} height={44} rx={22} ry={22} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}22` : '#e6f2ff')} stroke={isPending ? '#ef4444' : (customColor || '#073B70')} strokeWidth={isPending || data?.selected ? 3 : 2} />
-                <text x={0} y={6} fontFamily="Roboto, Arial" fontSize={13} fontWeight={800} fill={isPending ? '#b91c1c' : (customColor || '#073B70')} textAnchor="middle" onClick={beginEdit} onDoubleClick={beginEdit} style={{ cursor: 'pointer' }}>{labelText}</text>
+                <text x={0} y={6} fontFamily="Roboto, Arial" fontSize={13} fontWeight={800} fill={isPending ? '#b91c1c' : (customColor || '#073B70')} textAnchor="middle" style={{ cursor: 'pointer' }}>{labelText}</text>
               </>
             )}
           </g>
@@ -764,11 +1333,11 @@ function FlowPlantNode(props) {
 }
 
 function FlowDistrictNode(props) {
-  const { data, ...rest } = props || {};
-  const { InputProps, updateNodeDimensions, onNodeMouseDown, ...safeProps } = rest || {};
+  const { data } = props || {};
   const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(getNodeDisplayName({ data: nodeData }));
+  const inputRef = useRef(null);
   const customColor = nodeData?.customColor || nodeData?.color;
 
   useEffect(() => {
@@ -790,6 +1359,7 @@ function FlowDistrictNode(props) {
       if (onConnectNode) onConnectNode(nodeData.id);
       return;
     }
+    try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('FLOWDISTRICTNODE_HANDLECLICK:' + (nodeData && nodeData.id)); } } catch (e) {}
     if (onSelect) onSelect(nodeData.id);
   };
   const isPending = Boolean(data && data.pendingConnect);
@@ -800,6 +1370,7 @@ function FlowDistrictNode(props) {
     ev.stopPropagation();
     setDraft(labelText);
     setIsEditing(true);
+    try { if (typeof window !== 'undefined') window.__LAST_BEGIN_EDIT = nodeData?.id || data?.id || null; } catch (e) {}
   };
 
   const saveLabel = () => {
@@ -835,7 +1406,7 @@ function FlowDistrictNode(props) {
   const bottomHandle = rotatePoint(cx, h - 4, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
       <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
       <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
@@ -849,6 +1420,7 @@ function FlowDistrictNode(props) {
                 <div className="nodrag" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <input
                     autoFocus
+                    ref={inputRef}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(event) => {
@@ -909,7 +1481,7 @@ function FlowDistrictNode(props) {
             ) : (
               <>
                 <rect rx={6} ry={6} x={-78} y={-17} width={156} height={34} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}18` : '#fff')} stroke={isPending ? '#ef4444' : (customColor || (data?.selected ? '#2563eb' : '#6b7280'))} strokeWidth={isPending || data?.selected ? 2.5 : 1} />
-                <text x={0} y={5} fontFamily="Roboto, Arial" fontSize={12} fill={isPending ? '#b91c1c' : (customColor || '#475569')} fontWeight={700} textAnchor="middle" onClick={beginEdit} onDoubleClick={beginEdit} style={{ cursor: 'pointer' }}>{labelText}</text>
+                <text x={0} y={5} fontFamily="Roboto, Arial" fontSize={12} fill={isPending ? '#b91c1c' : (customColor || '#475569')} fontWeight={700} textAnchor="middle" style={{ cursor: 'pointer' }}>{labelText}</text>
               </>
             )}
           </g>
@@ -921,32 +1493,35 @@ function FlowDistrictNode(props) {
 
 // Shape / Note / Text Card Node — soporta formas SVG tipo Paint
 function FlowShapeNode(props) {
-  const { data, ...rest } = props || {};
-  const { InputProps, updateNodeDimensions, onNodeMouseDown, ...safeProps } = rest || {};
-  const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
+  const { data } = props || {};
+  const runtimeNodeData = data?.nodeData || data || {};
+  const { nodeData = runtimeNodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
   const [isEditing, setIsEditing] = useState(false);
-  const [draft, setDraft] = useState(nodeData?.label || 'Texto / Forma');
-  const [metricLabel, setMetricLabel] = useState(null);
-  const customColor = nodeData?.customColor || nodeData?.color || '#3b82f6';
-  const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(customColor) ? customColor : '#3b82f6';
+  const runtimeDisplayName = getStableRuntimeShapeName(nodeData);
+  const [draft, setDraft] = useState(runtimeDisplayName);
+  const inputRef = useRef(null);
+  const isMackenflocById = Boolean(nodeData && nodeData.id && MACKENFLOC_ID_TO_LABEL[String(nodeData.id)]);
+  const customColor = nodeData?.customColor || nodeData?.color || (isMackenflocById ? '#f59e0b' : '#3b82f6');
+  const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(customColor) ? customColor : (isMackenflocById ? '#f59e0b' : '#3b82f6');
   const baseSize = getAutoShapeSize(draft, nodeData?.width, nodeData?.height);
   const width = Number.isFinite(Number(nodeData?.width)) ? Number(nodeData.width) : Number.isFinite(Number(baseSize.width)) ? Number(baseSize.width) : 120;
   const height = Number.isFinite(Number(nodeData?.height)) ? Number(nodeData.height) : Number.isFinite(Number(baseSize.height)) ? Number(baseSize.height) : 68;
   const shapeType = nodeData?.shapeType || 'rect';
 
   useEffect(() => {
-    setDraft(nodeData?.label || nodeData?.customName || 'Texto / Forma');
-  }, [nodeData?.label, nodeData?.customName]);
+    setDraft(runtimeDisplayName);
+  }, [runtimeDisplayName]);
 
+  const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '') ? String(runtimeNodeData.ptapMetricText) : null;
+  const metricLabel = (runtimeNodeData && runtimeNodeData.ptapMetricLabel != null && runtimeNodeData.ptapMetricLabel !== '') ? String(runtimeNodeData.ptapMetricLabel) : null;
+  const isChembeNode = String(runtimeNodeData?.id ?? '').trim() === 'ptap-chembe';
+  const _resolvedExactTag = getExactMackenflocTagForNode({ id: runtimeNodeData && runtimeNodeData.id, label: runtimeNodeData && runtimeNodeData.label }, runtimeNodeData, _ptapMetricsMap);
+  const isMackenflocShape = Boolean(_resolvedExactTag && String(_resolvedExactTag).toUpperCase().includes('MACKENFLOC'));
 
-  // No dynamic metrics for shape nodes to preserve original layout.
-
-  useEffect(() => {
-    if (data && data.openEditor) {
-      setIsEditing(true);
-      try { if (typeof data.onEditorShown === 'function') data.onEditorShown(nodeData?.id || data?.id); } catch (e) {}
-    }
-  }, [data?.openEditor]);
+  // Respect zero as a valid API value while still suppressing null/undefined.
+  const effectiveMetricText = (metricText !== null && metricText !== undefined && metricText !== '') ? String(metricText).trim() : null;
+  const shouldRenderMetricBadge = !isMackenflocShape && effectiveMetricText !== null;
+  const shouldRenderMackenflocInline = isMackenflocShape && effectiveMetricText !== null;
 
   const handleClick = (ev) => {
     ev.stopPropagation();
@@ -967,10 +1542,11 @@ function FlowShapeNode(props) {
       }
       return;
     }
+    try { if (typeof window !== 'undefined') { window.__SELECTION_TRACE = window.__SELECTION_TRACE || []; window.__SELECTION_TRACE.push('FLOWSHAPENODE_HANDLECLICK:' + (nodeData && nodeData.id)); } } catch (e) {}
     if (onSelect) onSelect(nodeData.id);
   };
 
-  const beginEdit = (ev) => { ev.preventDefault(); ev.stopPropagation(); setDraft(getNodeDisplayName({ data: nodeData })); setIsEditing(true); };
+  const beginEdit = (ev) => { ev.preventDefault(); ev.stopPropagation(); setDraft(getNodeDisplayName({ data: nodeData })); setIsEditing(true); try { if (typeof window !== 'undefined') window.__LAST_BEGIN_EDIT = nodeData?.id || data?.id || null; } catch (e) {} };
   const saveLabel = () => {
     const clean = (draft || '').trim() || 'Texto';
     if (onRename) onRename(nodeData.id, clean);
@@ -1034,7 +1610,7 @@ function FlowShapeNode(props) {
   };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
+    <div onClick={handleClick} style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
       <Handle type="target" position={Position.Left} id="t-left" style={handleStyle} />
       <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
       <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
@@ -1042,10 +1618,38 @@ function FlowShapeNode(props) {
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
         <g transform={`translate(${width / 2}, ${height / 2}) rotate(${Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0}) translate(${-width / 2}, ${-height / 2})`}>
           {renderShape()}
-          {!isEditing && shapeType !== 'line' ? (
+          {(() => {
+            try {
+              if (shouldRenderMetricBadge) {
+                const badgeText = effectiveMetricText || '';
+                const boxW = Math.min(120, Math.max(64, String(badgeText || '').length * 8));
+                const boxX = Math.max(2, Math.round((width - boxW) / 2));
+                return (
+                  <foreignObject x={boxX} y={-28} width={boxW} height={22} style={{ overflow: 'visible' }}>
+                    <div xmlns="http://www.w3.org/1999/xhtml" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '1px solid #94a3b8', borderRadius: 6, padding: '2px 6px', boxShadow: '0 2px 6px rgba(0,0,0,0.12)', fontSize: 11, fontWeight: 900, color: '#0b2447', whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+                      {badgeText}
+                    </div>
+                  </foreignObject>
+                );
+              }
+
+              if (shouldRenderMackenflocInline) {
+                const titleY = Math.round(height / 2) - 4;
+                const valueY = Math.round(height / 2) + 12;
+                return (
+                  <>
+                    <text x={width / 2} y={titleY} fontFamily="Roboto, Arial" fontSize={12} fill="#0b2447" fontWeight={800} textAnchor="middle" style={{ pointerEvents: 'none' }}>{runtimeDisplayName}</text>
+                    <text x={width / 2} y={valueY} fontFamily="Roboto, Arial" fontSize={12} fill="#0b2447" fontWeight={700} textAnchor="middle" style={{ pointerEvents: 'none' }}>{effectiveMetricText || ''}</text>
+                  </>
+                );
+              }
+            } catch (e) {}
+            return null;
+          })()}
+          {!isEditing && shapeType !== 'line' && !isMackenflocShape ? (
             <foreignObject x={0} y={0} width={width} height={height} style={{ overflow: 'visible' }}>
               <div xmlns="http://www.w3.org/1999/xhtml" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', wordBreak: 'break-word', color: '#0b2447', fontSize: 13, fontWeight: 700, padding: '4px 8px', boxSizing: 'border-box', pointerEvents: 'none', width: '100%', height: '100%' }}>
-                {draft}
+                <div style={{ width: '100%', lineHeight: 1.2 }}>{shouldRenderMetricBadge ? (STABLE_SHAPE_NAME_BY_ID[String(nodeData?.id || '')] || draft) : draft}</div>
               </div>
             </foreignObject>
           ) : null}
@@ -1054,7 +1658,7 @@ function FlowShapeNode(props) {
       {isPending && (<div style={{ position: 'absolute', top: -14, left: '50%', transform: 'translateX(-50%)', background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 900, padding: '1px 6px', borderRadius: 4 }}>ORIGEN</div>)}
       {isEditing ? (
         <div className="nodrag" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: width - 20, display: 'flex', flexDirection: 'column', gap: 4, zIndex: 10 }}>
-          <textarea autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+          <textarea ref={inputRef} autoFocus value={draft} onChange={e => setDraft(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveLabel(); } if (e.key === 'Escape') { e.preventDefault(); setIsEditing(false); } }}
             onBlur={() => saveLabel()}
             style={{ width: '100%', minHeight: 48, fontSize: 12, fontFamily: 'inherit', fontWeight: 700, color: '#0b2447', border: `1px solid ${safeColor}`, borderRadius: 4, padding: 4, boxSizing: 'border-box', outline: 'none', resize: 'none', background: 'rgba(255,255,255,0.95)' }} />
@@ -1077,10 +1681,12 @@ function formatDateLabel(isoDate, fmt = 'dd/MM/yyyy') {
   } catch (e) { return isoDate || ''; }
 }
 
-const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [], initialEdges = [], onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
+const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, initialEdges, onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
 
   // Note: avoid updateNodeDimensions to prevent React Flow from hiding nodes while measuring
   try { console.debug('[DISTRICT DEBUG] DistrictFlow init props initialNodes.length:', (initialNodes || []).length, 'initialEdges.length:', (initialEdges || []).length); } catch (e) {}
+
+  // (Removed synthetic-event polyfill) Do not alter global event constructors.
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [rfInstance, setRfInstance] = useState(null);
@@ -1090,41 +1696,94 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       if (!document.getElementById('district-force-visible')) {
         const s = document.createElement('style');
         s.id = 'district-force-visible';
-        s.innerHTML = '.react-flow__node{visibility: visible !important; opacity: 1 !important;} .react-flow__node *{visibility: visible !important;}';
+        s.innerHTML = '.react-flow__node{visibility: visible !important; opacity: 1 !important;} .react-flow__node *{visibility: visible !important;} .react-flow__edges,.react-flow__edges *{pointer-events: none !important; mask: url(#rf-nodes-occlusion-mask); -webkit-mask: url(#rf-nodes-occlusion-mask);}';
         document.head.appendChild(s);
       }
     } catch (e) {}
   }, []);
+
+  // Ensure the edges container references the dynamically generated mask.
+  useEffect(() => {
+    try {
+      const edgesGroup = document.querySelector('.react-flow__edges');
+      if (edgesGroup && !edgesGroup.getAttribute('mask')) {
+        try { edgesGroup.setAttribute('mask', 'url(#rf-nodes-occlusion-mask)'); } catch (e) {}
+      }
+    } catch (e) {}
+  }, [nodes]);
+
+// Render an SVG <mask> that hides edge strokes only under the visible node body.
+// White badges and labels are intentionally excluded so they remain readable and
+// arrowheads keep their full visual footprint.
+const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }) {
+  try {
+    if (!Array.isArray(nodes) || !nodes.length) return null;
+    return (
+      <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'visible' }}>
+        <defs>
+          <mask id="rf-nodes-occlusion-mask" maskUnits="userSpaceOnUse">
+            <rect x={-10000} y={-10000} width={20000} height={20000} fill="white" />
+            {nodes.map((n) => {
+              const px = n.position && Number.isFinite(Number(n.position.x)) ? Number(n.position.x) : 0;
+              const py = n.position && Number.isFinite(Number(n.position.y)) ? Number(n.position.y) : 0;
+              const rawW = Number.isFinite(Number(n.width)) && Number(n.width) > 0 ? Number(n.width) : (n.data && n.data.nodeData && Number.isFinite(Number(n.data.nodeData.width)) ? Number(n.data.nodeData.width) : 120);
+              const rawH = Number.isFinite(Number(n.height)) && Number(n.height) > 0 ? Number(n.height) : (n.data && n.data.nodeData && Number.isFinite(Number(n.data.nodeData.height)) ? Number(n.data.nodeData.height) : 68);
+              const isTank = String(n.type || n.data?.type || '').toLowerCase() === 'tank';
+              const inset = isTank ? 22 : 10;
+              const bodyX = px + inset;
+              const bodyY = isTank ? py + 32 : py + 12;
+              const bodyW = Math.max(24, rawW - inset * 2);
+              const bodyH = Math.max(20, rawH - (isTank ? 50 : 22));
+              return <rect key={String(n.id)} x={bodyX} y={bodyY} width={bodyW} height={bodyH} rx={isTank ? 12 : 8} ry={isTank ? 12 : 8} fill="black" />;
+            })}
+          </mask>
+        </defs>
+      </svg>
+    );
+  } catch (e) {
+    return null;
+  }
+}, (prev, next) => {
+  try {
+    const a = Array.isArray(prev.nodes) ? prev.nodes : [];
+    const b = Array.isArray(next.nodes) ? next.nodes : [];
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      const na = a[i];
+      const nb = b[i];
+      if (!na || !nb) return false;
+      if (String(na.id) !== String(nb.id)) return false;
+      const pax = na.position && Number.isFinite(Number(na.position.x)) ? Number(na.position.x) : 0;
+      const pay = na.position && Number.isFinite(Number(na.position.y)) ? Number(na.position.y) : 0;
+      const pbx = nb.position && Number.isFinite(Number(nb.position.x)) ? Number(nb.position.x) : 0;
+      const pby = nb.position && Number.isFinite(Number(nb.position.y)) ? Number(nb.position.y) : 0;
+      if (pax !== pbx || pay !== pby) return false;
+      const aw = Number.isFinite(Number(na.width)) && Number(na.width) > 0 ? Number(na.width) : (na.data && na.data.nodeData && Number.isFinite(Number(na.data.nodeData.width)) ? Number(na.data.nodeData.width) : 120);
+      const ah = Number.isFinite(Number(na.height)) && Number(na.height) > 0 ? Number(na.height) : (na.data && na.data.nodeData && Number.isFinite(Number(na.data.nodeData.height)) ? Number(na.data.nodeData.height) : 68);
+      const bw = Number.isFinite(Number(nb.width)) && Number(nb.width) > 0 ? Number(nb.width) : (nb.data && nb.data.nodeData && Number.isFinite(Number(nb.data.nodeData.width)) ? Number(nb.data.nodeData.width) : 120);
+      const bh = Number.isFinite(Number(nb.height)) && Number(nb.height) > 0 ? Number(nb.height) : (nb.data && nb.data.nodeData && Number.isFinite(Number(nb.data.nodeData.height)) ? Number(nb.data.nodeData.height) : 68);
+      if (aw !== bw || ah !== bh) return false;
+    }
+    return true;
+  } catch (e) { return false; }
+});
+
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const selectedNodeIdRef = useRef(null);
+  const initialSelectionIgnoredRef = useRef(false);
 
   useEffect(() => {
-    if ((nodes || []).length > 0) return;
+    selectedNodeIdRef.current = selectedNodeId;
+  }, [selectedNodeId]);
+
+  const [bootstrapStatus, setBootstrapStatus] = useState('loading');
+
+  useEffect(() => {
+    if ((nodes || []).length > 0 || (edges || []).length > 0) return;
+    if (bootstrapStatus !== 'loading') return;
     if (!Array.isArray(initialNodes) || initialNodes.length > 0) return;
-
-    const fallbackNodes = STATIC_NODES.map((node) => {
-      if (node.type === 'plant' || node.type === 'district') {
-        return { id: node.id, type: node.type, label: node.label, position: node.position, data: { display_name: node.label } };
-      }
-      return { id: node.id, type: 'tank', label: node.label, position: node.position, data: { display_name: node.label, __placeholder: true } };
-    });
-
-    const fallbackEdges = (STATIC_CONNECTIONS || []).map((c) => ({
-      id: `${c.from}-${c.to}`,
-      source: c.from,
-      target: c.to,
-      label: c.label,
-      type: 'step',
-      markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-      style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' },
-      animated: false,
-    }));
-
-    setNodes(fallbackNodes);
-    nodesRef.current = fallbackNodes;
-    setEdges(fallbackEdges);
-    edgesRef.current = fallbackEdges;
-  }, [initialNodes, nodes]);
+    if (!Array.isArray(initialEdges) || initialEdges.length > 0) return;
+  }, [initialNodes, initialEdges, edges, nodes, bootstrapStatus]);
 
   const _setSelectedNodeId = useCallback((id) => {
     selectedNodeIdRef.current = typeof id === 'function' ? id(selectedNodeIdRef.current) : id;
@@ -1174,7 +1833,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       return isSource ? (sourceMap[best] || 's-right') : (targetMap[best] || 't-left');
     } catch (e) { return undefined; }
   }, []);
-  const openEditorRef = useRef(new Set());
   const [showFlow, setShowFlow] = useState(false);
   const [connectDate, setConnectDate] = useState('');
   const [connectDateFormat, setConnectDateFormat] = useState(() => {
@@ -1184,7 +1842,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   // 'edit' = nodos arrastrables | 'view' = solo visual (no se puede tocar nada)
   // diagramMode: se controla desde el padre (DistrictMap) via prop, pero también tiene estado local como fallback
   const [diagramMode, setDiagramMode] = useState(() => {
-    try { return localStorage.getItem('district_diagram_mode') || 'view'; } catch (e) { return 'view'; }
+    try {
+      const saved = localStorage.getItem('district_diagram_mode');
+      return saved === 'view' ? 'view' : 'edit';
+    } catch (e) { return 'edit'; }
   });
   // Sincronizar con el prop externo cuando cambia
   useEffect(() => {
@@ -1203,11 +1864,16 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     return { useRight: true, right: 12, top: 12, x: null, y: 12 };
   });
   const overlayRef = useRef(null);
-  const [overlayVisible, setOverlayVisible] = useState(true);
+  const [overlayVisible, setOverlayVisible] = useState(false);
   const draggingRef = useRef(false);
   const dragOffsetRef = useRef(0);
+  const dragMovedRef = useRef(false);
+  const dragStartPositionRef = useRef({ x: 0, y: 0 });
+  const suppressClickAfterDragRef = useRef(false);
+  const suppressSelectionAfterDragRef = useRef(false);
+  const dragSuppressUntilRef = useRef(0);
   const autoSaveTimerRef = useRef(null);
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const autoSaveEnabledRef = useRef(autoSaveEnabled);
   useEffect(() => { try { autoSaveEnabledRef.current = !!autoSaveEnabled; } catch (e) {} }, [autoSaveEnabled]);
   const wsRef = useRef(null);
@@ -1224,7 +1890,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const pendingServerSaveRef = useRef(null);
   const serverSaveTimerRef = useRef(null);
   const serverBackoffRef = useRef({ attempts: 0, timeoutId: null });
+  // Track the operation id associated with the pendingServerSaveRef (diagnostic only)
+  const pendingOpIdRef = useRef(null);
   const heartbeatRef = useRef(null);
+  // Guard to aggressively suppress any server writes while applying a remote update
+  const suppressServerWritesRef = useRef(false);
 
   // Expose helpers to inspect and manage the send queue
   const flushSendQueue = useCallback(async () => {
@@ -1236,7 +1906,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         let sent = 0;
         while (sendQueueRef.current && sendQueueRef.current.length) {
           const m = sendQueueRef.current.shift();
-          try { wsRef.current.send(m); sent += 1; } catch (e) { console.warn('[WS CLIENT] flushSendQueue send error', e && e.message); sendQueueRef.current.unshift(m); break; }
+          // support diagnostic-wrapped entries: { msg, _diagOpId }
+          let toSend = m;
+          try {
+            if (m && typeof m === 'object' && m.msg) toSend = m.msg;
+            if (typeof m === 'string') {
+              try { const parsed = JSON.parse(m); if (parsed && parsed.msg) toSend = parsed.msg; } catch (e) {}
+            }
+          } catch (e) {}
+          try { wsRef.current.send(toSend); sent += 1; } catch (e) { console.warn('[WS CLIENT] flushSendQueue send error', e && e.message); sendQueueRef.current.unshift(m); break; }
         }
         try { localStorage.setItem('district_ws_queue', JSON.stringify(sendQueueRef.current || [])); } catch (e) {}
         console.log('[WS CLIENT] flushSendQueue sent', sent);
@@ -1246,9 +1924,26 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       // Fallback: POST the most recent queued state to the server
       try {
         const last = q[q.length - 1];
-        const parsed = JSON.parse(last || '{}');
-        const state = parsed.state || parsed;
+        let parsed = null;
+        if (typeof last === 'string') {
+          try { parsed = JSON.parse(last || '{}'); } catch (e) { parsed = last; }
+        } else parsed = last;
+        // if wrapped, dig into msg
+        let state = null;
+        try {
+          if (parsed && parsed.msg) {
+            try { state = JSON.parse(parsed.msg); } catch (e) { state = parsed.msg; }
+          } else {
+            state = parsed.state || parsed;
+          }
+        } catch (e) { state = parsed; }
         if (state && typeof state === 'object') {
+          // Respect suppression guard: do not perform server writes while
+          // applying remote authoritative state.
+          if (suppressServerWritesRef.current || applyingRemoteRef.current) {
+            try { console.debug('[DIAGRAM] flushSendQueue suppressed due to applyingRemote/suppress flag'); } catch (e) {}
+            return false;
+          }
           await diagramService.saveState(state);
           sendQueueRef.current = [];
           try { localStorage.removeItem('district_ws_queue'); } catch (e) {}
@@ -1274,54 +1969,38 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     try {
       const raw = JSON.parse(localStorage.getItem('district_state') || '{}');
       if (!raw || typeof raw !== 'object') return {};
-      const normalizedNodes = raw.nodes && typeof raw.nodes === 'object'
-        ? Object.fromEntries(
-            Object.entries(raw.nodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)] )
-          )
-        : {};
-      raw.nodes = normalizedNodes;
-      raw.hiddenNodeIds = Array.isArray(raw.hiddenNodeIds) ? [...new Set(raw.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
-      raw.deletedNodeIds = Array.isArray(raw.deletedNodeIds) ? [...new Set(raw.deletedNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
-      return raw;
+      const normalizedNodes = normalizeSavedNodeMap(raw.nodes);
+      const sanitizedNodes = Object.fromEntries(
+        Object.entries(normalizedNodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual({ ...(entry || {}), id })])
+      );
+      const hiddenNodeIds = Array.isArray(raw.hiddenNodeIds) ? [...new Set(raw.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
+      const deletedNodeIds = Array.isArray(raw.deletedNodeIds) ? [...new Set(raw.deletedNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
+      const removedIds = new Set([...hiddenNodeIds, ...deletedNodeIds]);
+      const filteredNodes = Object.fromEntries(Object.entries(normalizedNodes).filter(([id]) => !removedIds.has(id)));
+      return {
+        ...raw,
+        nodes: Object.fromEntries(Object.entries(filteredNodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual({ ...(entry || {}), id })])),
+        hiddenNodeIds,
+        deletedNodeIds,
+        edges: Array.isArray(raw.edges) ? raw.edges.filter((edge) => {
+          const source = edge && edge.source != null ? String(edge.source) : '';
+          const target = edge && edge.target != null ? String(edge.target) : '';
+          return !removedIds.has(source) && !removedIds.has(target);
+        }) : [],
+      };
     } catch (e) {
       return {};
     }
   }, []);
 
   const readAuthoritativeDiagramState = useCallback(async () => {
-    try {
-      const remote = await diagramService.getState();
-      const remoteHasState = !!(
-        remote &&
-        typeof remote === 'object' &&
-        (
-          (remote.nodes && typeof remote.nodes === 'object' && Object.keys(remote.nodes).length > 0) ||
-          (Array.isArray(remote.edges) && remote.edges.length > 0)
-        )
-      );
-      if (!remoteHasState) return readDiagramState();
-
-      const normalized = { ...remote };
-      normalized.nodes = normalized.nodes && typeof normalized.nodes === 'object'
-        ? Object.fromEntries(Object.entries(normalized.nodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)]))
-        : {};
-      normalized.hiddenNodeIds = Array.isArray(normalized.hiddenNodeIds) ? [...new Set(normalized.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
-      normalized.deletedNodeIds = Array.isArray(normalized.deletedNodeIds) ? [...new Set(normalized.deletedNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
-      try { localStorage.setItem('district_state', JSON.stringify(normalized)); } catch (e) {}
-      return normalized;
-    } catch (e) {
-      return readDiagramState();
-    }
-  }, [readDiagramState]);
+    // Strict: return authoritative diagram state from backend only.
+    // Any network or API error must propagate so callers treat it as a real error.
+    return await diagramService.getState();
+  }, []);
 
   const _validateBeforeSave = (candidate, baseline) => {
     try {
-      const candNodes = candidate && candidate.nodes && typeof candidate.nodes === 'object' ? Object.keys(candidate.nodes).length : 0;
-      const baseNodes = baseline && baseline.nodes && typeof baseline.nodes === 'object' ? Object.keys(baseline.nodes).length : 0;
-      if (baseNodes >= 59 && candNodes < baseNodes) {
-        console.warn('[DIAGRAM] Validation failed: candidate node count is less than baseline', candNodes, '<', baseNodes);
-        return false;
-      }
       // ensure nodes have positions
       if (candidate && candidate.nodes && typeof candidate.nodes === 'object') {
         for (const [id, n] of Object.entries(candidate.nodes)) {
@@ -1347,96 +2026,66 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   // overwriting server state. localStorage is only cache; React Flow is
   // source of truth for state passed into this function.
   const savingRef = useRef(false);
-  const writeDiagramState = useCallback((nextState) => {
+  const writeDiagramState = useCallback((nextState, options = {}) => {
     try {
+      const source = String(options && options.source ? options.source : 'local').toLowerCase();
+      const sendToServer = Boolean(options && options.sendToServer === true);
       const safe = nextState && typeof nextState === 'object' ? nextState : {};
-      try { safe._updatedAt = new Date().toISOString(); } catch (e) { /* ignore */ }
+      const isStructuralState = (p) => {
+        try {
+          if (!p || typeof p !== 'object') return false;
+          const hasNodesKey = Object.prototype.hasOwnProperty.call(p, 'nodes');
+          const hasEdgesKey = Object.prototype.hasOwnProperty.call(p, 'edges');
+          const hasOtherKey = Object.keys(p).some(k => k !== 'nodes' && k !== 'edges');
+          return hasNodesKey || hasEdgesKey || hasOtherKey;
+        } catch (e) { return false; }
+      };
+
+      if (!isStructuralState(safe)) return;
+
+      const timestamp = safe.updated_at || safe._updatedAt || safe.updatedAt || new Date().toISOString();
+      safe.updated_at = timestamp;
+      safe._updatedAt = timestamp;
+      safe.updatedAt = timestamp;
       safe.hiddenNodeIds = Array.isArray(safe.hiddenNodeIds) ? [...new Set(safe.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
       safe.deletedNodeIds = Array.isArray(safe.deletedNodeIds) ? [...new Set(safe.deletedNodeIds.filter((id) => id != null && String(id).trim() !== ''))] : [];
       if (safe.nodes && typeof safe.nodes === 'object') {
+        const normalizedNodeMap = normalizeSavedNodeMap(safe.nodes);
         safe.nodes = Object.fromEntries(
-          Object.entries(safe.nodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)])
+          Object.entries(normalizedNodeMap).map(([id, entry]) => [id, sanitizePersistedNodeVisual({ ...(entry || {}), id })])
         );
       }
 
-      // Validate against local baseline only (do not fetch remote state here).
-      try {
-        const baseline = readDiagramState();
-        if (!_validateBeforeSave(safe, baseline)) {
-          console.warn('[DIAGRAM] Aborting server save: payload failed validation');
-          try { localStorage.setItem('district_state', JSON.stringify(safe)); } catch (e) {}
-          try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
+      const prevRaw = (function() { try { return JSON.parse(localStorage.getItem('district_state') || '{}'); } catch (e) { return {}; } })();
+      const prevTs = (prevRaw && (prevRaw.updated_at || prevRaw._updatedAt || prevRaw.updatedAt || '')) || '';
+      if (source === 'remote' && prevTs && timestamp && new Date(timestamp).getTime() < new Date(prevTs).getTime()) {
+        return;
+      }
+
+      try { localStorage.setItem('district_state_backup', JSON.stringify(prevRaw)); } catch (e) {}
+      try { localStorage.setItem('district_state', JSON.stringify(safe)); } catch (e) {}
+
+      // By default do NOT send to server automatically. To trigger server
+      // persistence and WS broadcast use explicit doSaveToServer which calls
+      // writeDiagramState with sendToServer=true.
+      if (sendToServer) {
+        if (suppressServerWritesRef.current || applyingRemoteRef.current) {
           return;
         }
-      } catch (e) { /* proceed conservatively */ }
 
-      // write local cache and keep a backup of previous cached state
-      try {
-        const prevRaw = (function() { try { return JSON.parse(localStorage.getItem('district_state') || '{}'); } catch (e) { return {}; } })();
-        try { localStorage.setItem('district_state_backup', JSON.stringify(prevRaw)); } catch (e) {}
-        try { localStorage.setItem('district_state', JSON.stringify(safe)); } catch (e) {}
-      } catch (e) {}
-
-      console.log('[DIAGRAM] writeDiagramState: local saved _updatedAt=', safe._updatedAt);
-
-      // Set latest pending payload and schedule debounced processing
-      pendingServerSaveRef.current = safe;
-      // clear any existing timer
-      try { if (serverSaveTimerRef.current) { clearTimeout(serverSaveTimerRef.current); serverSaveTimerRef.current = null; } } catch (e) {}
-
-      const processPending = async () => {
-        if (savingRef.current) return; // already running
-        savingRef.current = true;
-        // reset backoff attempts only on explicit start of processing
-        serverBackoffRef.current.attempts = serverBackoffRef.current.attempts || 0;
-        while (pendingServerSaveRef.current) {
-          const payload = pendingServerSaveRef.current;
-          // capture latest and clear so new updates can arrive
-          pendingServerSaveRef.current = null;
+        // perform server save directly (no auto-backoff loop here: rely on service)
+        (async () => {
           try {
-            await diagramService.saveState(payload);
-            console.log('[DIAGRAM] saved to server');
-            serverBackoffRef.current.attempts = 0;
+            await diagramService.saveState(safe);
             try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
+            // Do NOT broadcast from client; backend is expected to emit WS update.
           } catch (err) {
-            // on failure, restore payload as pending and schedule retry with backoff
-            serverBackoffRef.current.attempts = (serverBackoffRef.current.attempts || 0) + 1;
-            const attempt = Math.min(serverBackoffRef.current.attempts, 6);
-            const delay = Math.min(30000, Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 1000));
-            console.warn('[DIAGRAM] save to server failed, scheduling retry in', delay, 'ms', err && err.message);
-            pendingServerSaveRef.current = payload;
-            try { if (serverBackoffRef.current.timeoutId) clearTimeout(serverBackoffRef.current.timeoutId); } catch (e) {}
-            serverBackoffRef.current.timeoutId = setTimeout(() => {
-              serverBackoffRef.current.timeoutId = null;
-              processPending();
-            }, delay);
-            break; // exit loop; retry will re-enter
+            // propagate error to caller via console and keep local storage intact
+            console.warn('[DIAGRAM] saveState failed', err);
           }
-        }
-        savingRef.current = false;
-      };
-
-      serverSaveTimerRef.current = setTimeout(() => { processPending(); serverSaveTimerRef.current = null; }, 800);
-
-      // WebSocket notification (best-effort); keep queue behavior
-      try {
-        const msg = JSON.stringify({ type: 'diagram:update', updated_at: safe._updatedAt || new Date().toISOString(), state: safe });
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          try { wsRef.current.send(msg); } catch (e) { console.warn('[WS CLIENT] send failed', e && e.message); }
-        } else {
-          try {
-            sendQueueRef.current = sendQueueRef.current || [];
-            sendQueueRef.current.push(msg);
-            if (sendQueueRef.current.length > SEND_QUEUE_MAX) {
-              const dropped = sendQueueRef.current.length - SEND_QUEUE_MAX;
-              sendQueueRef.current.splice(0, dropped);
-              console.warn('[WS CLIENT] send queue exceeded max; dropped', dropped, 'oldest messages');
-            }
-            try { localStorage.setItem('district_ws_queue', JSON.stringify(sendQueueRef.current)); } catch (e) {}
-          } catch (e) { console.warn('[WS CLIENT] enqueue failed', e && e.message); }
-        }
-      } catch (e) { console.error('[WS CLIENT] send error', e && e.message); }
-    } catch (e) { console.error('[DIAGRAM] writeDiagramState error', e && e.message); }
+        })();
+      }
+    } catch (e) {}
   }, []);
 
   // Poll server periodically to detect remote updates and reload local state when newer
@@ -1444,35 +2093,35 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     // WebSocket connection for real-time sync with reconnection, queueing and heartbeat
     let mounted = true;
     const envWs = import.meta.env.VITE_WS_URL;
-    const wsUrl = envWs || `ws://127.0.0.1:8080`;
-    console.log('[WS CLIENT] using wsUrl=', wsUrl, envWs ? '(from VITE_WS_URL)' : '(forced to 127.0.0.1 for debug)');
+    const wsHost = (window.location && window.location.hostname) ? window.location.hostname : 'localhost';
+    const wsUrl = envWs || `ws://${wsHost}:8080`;
+    console.log('[WS CLIENT] using wsUrl=', wsUrl, envWs ? '(from VITE_WS_URL)' : '(derived from browser host)');
 
     const connect = () => {
       try {
-        console.log('[WS CLIENT] connecting to', wsUrl);
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.addEventListener('open', () => {
-          console.log('[WS CLIENT] open');
           reconnectRef.current.attempts = 0;
-          // flush send queue
           try {
-            // restore persisted queue if any
-            try {
-              const raw = localStorage.getItem('district_ws_queue');
-              if (raw) {
-                try { sendQueueRef.current = JSON.parse(raw) || sendQueueRef.current; } catch (e) { sendQueueRef.current = sendQueueRef.current; }
-              }
-            } catch (e) {}
-
+            const raw = localStorage.getItem('district_ws_queue');
+            if (raw) {
+              try { sendQueueRef.current = JSON.parse(raw) || sendQueueRef.current; } catch (e) { sendQueueRef.current = sendQueueRef.current; }
+            }
             while ((sendQueueRef.current || []).length > 0) {
               const m = sendQueueRef.current.shift();
-              try { ws.send(m); } catch (e) { console.warn('[WS CLIENT] flush send error', e && e.message); sendQueueRef.current.unshift(m); break; }
+              let toSend = m;
+              try {
+                if (m && typeof m === 'object' && m.msg) toSend = m.msg;
+                if (typeof m === 'string') {
+                  try { const parsed = JSON.parse(m); if (parsed && parsed.msg) toSend = parsed.msg; } catch (e) {}
+                }
+              } catch (e) {}
+              try { ws.send(toSend); } catch (e) { sendQueueRef.current.unshift(m); break; }
             }
             try { if ((sendQueueRef.current || []).length === 0) localStorage.removeItem('district_ws_queue'); else localStorage.setItem('district_ws_queue', JSON.stringify(sendQueueRef.current)); } catch (e) {}
           } catch (e) {}
-          // start heartbeat
           try { clearInterval(heartbeatRef.current); } catch (e) {}
           heartbeatRef.current = setInterval(() => {
             try { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping', ts: new Date().toISOString() })); } catch (e) {}
@@ -1481,7 +2130,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         });
 
         ws.addEventListener('message', (ev) => {
-          try { console.log('[WS CLIENT] received raw message', ev.data); } catch (e) {}
           try {
             const msg = JSON.parse(ev.data || '{}');
             if (!msg || typeof msg !== 'object') return;
@@ -1491,32 +2139,28 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               const localRaw = (function() { try { return localStorage.getItem('district_state') || '{}'; } catch (e) { return '{}'; }})();
               const local = JSON.parse(localRaw || '{}');
               const localTs = (local.updated_at || local.updatedAt || local._updatedAt || '').toString();
-              try {
-                const locked = (function() { try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; } })();
-                if (locked) {
-                  console.log('[WS CLIENT] remote diagram:update ignored because district_locked=1');
-                } else if (remoteTs && (!localTs || new Date(remoteTs).getTime() > new Date(localTs).getTime())) {
-                  try { applyRemoteState(remote); } catch (e) {}
-                }
-              } catch (e) {}
+              if (remoteTs && (!localTs || new Date(remoteTs).getTime() > new Date(localTs).getTime())) {
+                applyingRemoteRef.current = true;
+                pendingServerSaveRef.current = null;
+                try { if (serverSaveTimerRef.current) { clearTimeout(serverSaveTimerRef.current); serverSaveTimerRef.current = null; } } catch (e) {}
+                applyRemoteState(remote);
+                setTimeout(() => { applyingRemoteRef.current = false; }, 150);
+              }
             }
           } catch (e) {}
         });
 
-        ws.addEventListener('close', (ev) => {
-          console.log('[WS CLIENT] close', ev && ev.code);
+        ws.addEventListener('close', () => {
           wsRef.current = null;
           try { clearInterval(heartbeatRef.current); } catch (e) {}
           setWsConnected(false);
           scheduleReconnect();
         });
 
-        ws.addEventListener('error', (err) => {
-          console.error('[WS CLIENT] error', err && err.message);
+        ws.addEventListener('error', () => {
           try { ws.close(); } catch (e) {}
         });
       } catch (e) {
-        console.error('[WS CLIENT] connect exception', e && e.message);
         scheduleReconnect();
       }
     };
@@ -1526,86 +2170,389 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         reconnectRef.current.attempts = (reconnectRef.current.attempts || 0) + 1;
         const attempt = Math.min(reconnectRef.current.attempts, 6);
         const delay = Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 1000);
-        console.log('[WS CLIENT] scheduling reconnect in', delay, 'ms (attempt', reconnectRef.current.attempts, ')');
         try { clearTimeout(reconnectRef.current.timeoutId); } catch (e) {}
         reconnectRef.current.timeoutId = setTimeout(() => { if (mounted) connect(); }, delay);
       } catch (e) {}
     };
 
-    // initial connect (delayed slightly to let UI render faster)
     try {
       wsConnectTimerRef.current = setTimeout(() => connect(), 250);
     } catch (e) { connect(); }
 
-    // fallback polling if WS repeatedly fails (ensure clients eventually sync)
-    const pollingInterval = setInterval(async () => {
-      try {
-        const remote = await diagramService.getState();
-        if (!remote || typeof remote !== 'object') return;
-        const localRaw = (function() { try { return localStorage.getItem('district_state') || '{}'; } catch (e) { return '{}'; }})();
-        const local = JSON.parse(localRaw || '{}');
-        const remoteTs = (remote.updated_at || remote.updatedAt || remote._updatedAt || '').toString();
-        const localTs = (local.updated_at || local.updatedAt || local._updatedAt || '').toString();
-        if (remoteTs && (!localTs || new Date(remoteTs).getTime() > new Date(localTs).getTime())) {
-          try {
-            const locked = (function() { try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; } })();
-            if (mounted && typeof applyRemoteState === 'function' && !locked) {
-              applyRemoteState(remote);
-            } else if (locked) {
-              console.log('[POLL] remote state ignored because district_locked=1');
-            }
-          } catch (e) {}
-        }
-      } catch (e) {}
-    }, 15000);
-    return () => { mounted = false; try { clearInterval(pollingInterval); } catch (e) {}; try { clearInterval(heartbeatRef.current); } catch (e) {}; if (wsRef.current) { try { wsRef.current.close(); } catch (e) {} } if (reconnectRef.current.timeoutId) { try { clearTimeout(reconnectRef.current.timeoutId); } catch (e) {} } try { if (wsConnectTimerRef.current) clearTimeout(wsConnectTimerRef.current); } catch (e) {} };
+    return () => { mounted = false; try { clearInterval(heartbeatRef.current); } catch (e) {}; if (wsRef.current) { try { wsRef.current.close(); } catch (e) {} } if (reconnectRef.current.timeoutId) { try { clearTimeout(reconnectRef.current.timeoutId); } catch (e) {} } try { if (wsConnectTimerRef.current) clearTimeout(wsConnectTimerRef.current); } catch (e) {} };
   }, []);
 
   // Load full tank info asynchronously and merge into nodes' data (non-blocking).
   useEffect(() => {
     let mounted = true;
-    (async () => {
-      try {
-        const res = await tanqueService.getTanques();
-        const list = (res && res.tanques) || [];
-        if (!list || !list.length) return;
+      // Poll telemetry periodically and merge only into existing nodes in-memory.
+      let pollId = null;
+      const doPoll = async () => {
+        try {
+          const res = await tanqueService.getTanques();
+          // instrumentation: record response timestamp
+          try { window.__TIMINGS = window.__TIMINGS || {}; window.__TIMINGS.tanques = window.__TIMINGS.tanques || {}; window.__TIMINGS.tanques.response = Date.now(); } catch (e) {}
+          const list = (res && res.tanques) || [];
+          if (!list || !list.length) return;
+          // Fast-path: build direct lookups by tag/id/display_name for immediate update
+          const directTagMap = new Map();
+          const directIdMap = new Map();
+          for (const t of list) {
+            if (!t) continue;
+            const tagKey = String(t.tag || '').toUpperCase();
+            if (tagKey) directTagMap.set(tagKey, t);
+            try { if (t.id) directIdMap.set(String(t.id), t); } catch (e) {}
+            try { if (t.apiName) directTagMap.set(String(t.apiName).toUpperCase(), t); } catch (e) {}
+            try { if (t.display_name) directTagMap.set(String(t.display_name).toUpperCase(), t); } catch (e) {}
+          }
 
-        const map = new Map();
-        for (const t of list) {
-          if (!t) continue;
-          const key = String((t.tag || t.apiName || t.nombre || t.display_name || t.id || '')).toLowerCase();
-          map.set(key, t);
-        }
+          // quick pass: only exact matches (by explicit mapping, tag, id, apiName, display_name)
+          const quickMatchedIds = new Set();
+          const catalogForQuick = loadCatalog();
+          const quickUpdated = (nodesRef.current || []).map((n) => {
+            try {
+              const nd = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
+              const exactTankTag = EXACT_TANK_TAG_BY_NODE_ID[String(n.id || nd.id || '')] || null;
+              let found = null;
 
-        const updated = (nodesRef.current || []).map((n) => {
+              // PROTECT: do not attempt to match generic shape nodes (forma-*) to tanks
+              const nodeIdKey = String(n.id || nd.id || '').trim();
+              const nodeTypeKey = String(n.type || nd.type || '').toLowerCase();
+              const isGenericShape = nodeTypeKey === 'shape' || nodeIdKey.startsWith('forma-');
+              const explicitlyMapped = Boolean(EXACT_TANK_TAG_BY_NODE_ID[nodeIdKey] || MACKENFLOC_SHAPE_TAGS[nodeIdKey] || OPERATIONAL_SHAPE_TAGS[nodeIdKey] || FLOW_METRIC_CONFIG[nodeIdKey]);
+              if (isGenericShape && !explicitlyMapped) {
+                // skip matching for decorative/generic shapes
+                return n;
+              }
+
+              if (exactTankTag) {
+                const key = String(exactTankTag || '').toUpperCase();
+                found = directTagMap.get(key) || null;
+              }
+
+              // direct tag/id/apiName/display_name fast matches
+              if (!found) {
+                const tagCandidate = String(nd.tag || nd.apiName || nd.display_name || nd.nombre || '').toUpperCase();
+                if (tagCandidate && directTagMap.has(tagCandidate)) {
+                  found = directTagMap.get(tagCandidate);
+                }
+              }
+              if (!found) {
+                const idCandidate = String(n.id || nd.id || '').trim();
+                if (idCandidate && directIdMap.has(idCandidate)) found = directIdMap.get(idCandidate);
+              }
+
+              // If quick pass didn't find, leave original node (defer fuzzy matching)
+              if (!found) return n;
+
+              if (!found) {
+                const candidateValues = [nd.apiName, nd.originalName, nd.tag, nd.display_name, nd.nombre, nd.label, nd.customName, n.id, n.label];
+                for (const candidate of candidateValues) {
+                  if (candidate == null || String(candidate).trim() === '') continue;
+                  const aliases = buildComparableAliases(candidate);
+                  for (const alias of aliases) {
+                    if (!alias) continue;
+                    const direct = aliasMap.get(alias);
+                    const fuzzy = !direct ? Array.from(aliasMap.entries()).find(([key, value]) => key && (key === alias || textMatchesComparableAlias(key, alias)))?.[1] : null;
+                    const match = direct || fuzzy;
+                    if (match) {
+                      found = match;
+                      try {
+                          // diagnostic removed
+                      } catch (e) {}
+                      break;
+                    }
+                  }
+                  if (found) break;
+                }
+              }
+
+              if (!found) {
+                const labelText = [nd.label, nd.display_name, nd.nombre, nd.customName, nd.apiName, nd.originalName, n.label]
+                  .filter((value) => value != null && String(value).trim())
+                  .map((value) => String(value).trim())
+                  .join(' ');
+                if (labelText) {
+                  for (const t of list) {
+                    if (!t) continue;
+                    const tankLabels = [t.tag, t.apiName, t.originalName, t.nombre, t.display_name, t.id, t.label];
+                    if (tankLabels.some((value) => value != null && textMatchesComparableAlias(labelText, value))) {
+                      found = t;
+                      try {
+                        // diagnostic removed
+                      } catch (e) {}
+                      break;
+                    }
+                  }
+                }
+              }
+
+              if (!found) return n;
+
+              // preserve any user-locked/custom name and avoid changing layout
+              const nameLocked = Boolean(nd.nameLocked || n.nameLocked || (nd && nd.nameLocked));
+              const preservedCustom = nameLocked ? (nd.customName || n.customName || '') : (nd.customName || found.display_name || '');
+
+              // Merge API tank with local catalog (calibrated heights) to compute porcentaje consistently
+              const mergedApi = (mergeApiTanquesWithCatalog([found || {}], catalogForQuick) || [found])[0] || found;
+              const enriched = enrichTankNodeMetrics(mergedApi || {});
+              const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
+
+              // IMPORTANT: do not spread mergedNodeData into the top-level `data` object.
+              // Spreading it here previously overwrote visual/design properties (width, height,
+              // label, display_name, etc.) causing shapes to resize and show incorrect names.
+              // Keep telemetry inside `nodeData` only so design is preserved.
+              quickMatchedIds.add(n.id);
+              return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData } };
+            } catch (e) { return n; }
+          });
+
+          // instrument: measure quick mapping time and changed count
           try {
-            const nd = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
-            const candidates = [nd.apiName, nd.originalName, nd.tag, nd.display_name, nd.nombre, nd.label, n.id].map(x => String(x || '').toLowerCase());
-            let found = null;
-            for (const c of candidates) {
-              if (!c) continue;
-              if (map.has(c)) { found = map.get(c); break; }
+            window.__TIMINGS = window.__TIMINGS || {};
+            const t0 = performance.now();
+            const changedCount = quickUpdated.reduce((acc, n, i) => acc + (n === nodesRef.current[i] ? 0 : (n && n.data && n.data.nodeData) !== (nodesRef.current[i] && nodesRef.current[i].data && nodesRef.current[i].data.nodeData) ? 1 : 0), 0);
+            nodesRef.current = quickUpdated;
+            window.__TIMINGS.district = window.__TIMINGS.district || {};
+            window.__TIMINGS.district.quickMapMs = (window.__TIMINGS.district.quickMapMs || 0) + (performance.now() - t0);
+            window.__TIMINGS.district.quickChangedCount = (window.__TIMINGS.district.quickChangedCount || 0) + changedCount;
+          } catch (e) {}
+          try { window.__TIMINGS.tanques.setNodes = Date.now(); } catch (e) {}
+          try {
+            // mark before setNodes so we can measure until next paint
+            try { performance.mark('beforeSetNodes_quick'); } catch (e) {}
+            if (rfInstance && typeof rfInstance.setNodes === 'function') {
+              rfInstance.setNodes(quickUpdated);
+            } else {
+              setNodes([...quickUpdated]);
             }
-            if (!found) return n;
+            // measure until next paint (double RAF)
+            try {
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                try { performance.mark('afterSetNodesPaint_quick'); performance.measure('setNodesToPaint_quick', 'beforeSetNodes_quick', 'afterSetNodesPaint_quick'); const m = performance.getEntriesByName('setNodesToPaint_quick').pop(); if (m) { window.__TIMINGS.district.setNodesToPaintQuickMs = (window.__TIMINGS.district.setNodesToPaintQuickMs || 0) + m.duration; }
+                } catch (e) {}
+              }));
+            } catch (e) {}
+          } catch (e) { try { setNodes([...quickUpdated]); } catch (er) {} }
 
-            const nameLocked = Boolean(nd.nameLocked || n.nameLocked || (nd && nd.nameLocked));
-            const preservedCustom = nameLocked ? (nd.customName || n.customName || '') : (nd.customName || found.display_name || '');
+          // schedule deferred full mapping (fuzzy) to avoid blocking the render
+          setTimeout(() => {
+            try {
+                const aliasMap = new Map();
+                try {
+                  const am0 = performance.now();
+                  for (const t of list) {
+                    if (!t) continue;
+                    const candidateValues = [t.tag, t.apiName, t.originalName, t.nombre, t.display_name, t.id, t.label];
+                    for (const candidate of candidateValues) {
+                      const aliases = buildComparableAliases(candidate);
+                      for (const alias of aliases) {
+                        if (alias && !aliasMap.has(alias)) aliasMap.set(alias, t);
+                      }
+                    }
+                  }
+                  window.__TIMINGS.district.aliasMapMs = (window.__TIMINGS.district.aliasMapMs || 0) + (performance.now() - am0);
+                } catch (e) {}
 
-            const enriched = enrichTankNodeMetrics(found || {});
-            const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
+              const catalogForFull = loadCatalog();
+              const tFull0 = performance.now();
+              const fullUpdated = (nodesRef.current || []).map((n) => {
+                try {
+                  // Skip nodes already updated by the quick pass
+                  if (quickMatchedIds.has(n.id)) return n;
+                  const nd = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
+                  const exactTankTag = EXACT_TANK_TAG_BY_NODE_ID[String(n.id || nd.id || '')] || null;
+                  let found = null;
 
-            return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData, ...mergedNodeData } };
-          } catch (e) { return n; }
-        });
+                  if (exactTankTag) {
+                    found = list.find((item) => item && String(item.tag || '').toUpperCase() === String(exactTankTag).toUpperCase()) || null;
+                  }
 
-        if (mounted) {
-          nodesRef.current = updated;
-          setNodes([...updated]);
-        }
-      } catch (e) {}
-    })();
-    return () => { mounted = false; };
+                  if (!found) {
+                    const candidateValues = [nd.apiName, nd.originalName, nd.tag, nd.display_name, nd.nombre, nd.label, nd.customName, n.id, n.label];
+                    for (const candidate of candidateValues) {
+                      if (candidate == null || String(candidate).trim() === '') continue;
+                      const aliases = buildComparableAliases(candidate);
+                      for (const alias of aliases) {
+                        if (!alias) continue;
+                        const direct = aliasMap.get(alias);
+                        const fuzzy = !direct ? Array.from(aliasMap.entries()).find(([key, value]) => key && (key === alias || textMatchesComparableAlias(key, alias)))?.[1] : null;
+                        const match = direct || fuzzy;
+                        if (match) { found = match; break; }
+                      }
+                      if (found) break;
+                    }
+                  }
+
+                  if (!found) {
+                    const labelText = [nd.label, nd.display_name, nd.nombre, nd.customName, nd.apiName, nd.originalName, n.label]
+                      .filter((value) => value != null && String(value).trim())
+                      .map((value) => String(value).trim())
+                      .join(' ');
+                    if (labelText) {
+                      for (const t of list) {
+                        if (!t) continue;
+                        const tankLabels = [t.tag, t.apiName, t.originalName, t.nombre, t.display_name, t.id, t.label];
+                        if (tankLabels.some((value) => value != null && textMatchesComparableAlias(labelText, value))) { found = t; break; }
+                      }
+                    }
+                  }
+
+                  if (!found) return n;
+
+                  const nameLocked = Boolean(nd.nameLocked || n.nameLocked || (nd && nd.nameLocked));
+                  const preservedCustom = nameLocked ? (nd.customName || n.customName || '') : (nd.customName || found.display_name || '');
+                  const mergedApi = (mergeApiTanquesWithCatalog([found || {}], catalogForFull) || [found])[0] || found;
+                  const enriched = enrichTankNodeMetrics(mergedApi || {});
+                  const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
+                  return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData } };
+                } catch (e) { return n; }
+              });
+
+              const fullMapMs = performance.now() - tFull0;
+              try { window.__TIMINGS.district.fullMapMs = (window.__TIMINGS.district.fullMapMs || 0) + fullMapMs; } catch (e) {}
+              nodesRef.current = fullUpdated;
+              try { window.__TIMINGS.tanques.fullSetNodes = Date.now(); } catch (e) {}
+              try {
+                try { performance.mark('beforeSetNodes_full'); } catch (e) {}
+                if (rfInstance && typeof rfInstance.setNodes === 'function') {
+                  rfInstance.setNodes(fullUpdated);
+                } else {
+                  setNodes([...fullUpdated]);
+                }
+                try {
+                  requestAnimationFrame(() => requestAnimationFrame(() => {
+                    try { performance.mark('afterSetNodesPaint_full'); performance.measure('setNodesToPaint_full', 'beforeSetNodes_full', 'afterSetNodesPaint_full'); const m = performance.getEntriesByName('setNodesToPaint_full').pop(); if (m) { window.__TIMINGS.district.setNodesToPaintFullMs = (window.__TIMINGS.district.setNodesToPaintFullMs || 0) + m.duration; }
+                    } catch (e) {}
+                  }));
+                } catch (e) {}
+              } catch (e) { try { setNodes([...fullUpdated]); } catch (er) {} }
+            } catch (e) {}
+          }, 0);
+        } catch (e) { /* ignore telemetry errors */ }
+      };
+
+      // initial poll and periodic refresh (5s)
+      doPoll();
+      pollId = setInterval(() => doPoll(), 5000);
+      return () => { mounted = false; try { if (pollId) clearInterval(pollId); } catch (e) {} };
   }, []);
+
+  // PTAP metrics (Mackenfloc capacities) — subscribe to module-scoped PTAP polling
+  useEffect(() => {
+    try {
+      _ensurePtapMetricsPolling();
+      const listener = (map) => {
+        try {
+          if (!map) return;
+          // quick pass: direct tag matches
+          const quickMatchedPtap = new Set();
+          const quick = (nodesRef.current || []).map((n) => {
+            try {
+              const nd = (n.data && n.data.nodeData) ? { ...(n.data.nodeData) } : (n.data || {});
+              let nextNodeData = { ...nd };
+              const exactTag = getExactMackenflocTagForNode(n, nextNodeData, map);
+              const resolvedShapeTag = resolveLivePtapTagForNode(n, map, exactTag);
+              // try direct lookup by resolvedShapeTag or node's stored tag
+              const keyTag = String(resolvedShapeTag || nextNodeData.tag || nextNodeData.id || '').toUpperCase();
+              if (keyTag && map && map[keyTag]) {
+                const variable = map[keyTag];
+                const metricText = _formatMetric(variable);
+                const finalTag = keyTag || '';
+                const isMacken = String(finalTag || '').toUpperCase().includes('MACKENFLOC');
+                nextNodeData = { ...nextNodeData, ptapMetricText: metricText || null, ptapMetricLabel: metricText ? null : null, ptapMetricAbove: isMacken ? false : true, ptapMetricRaw: variable || null };
+                quickMatchedPtap.add(n.id);
+                return { ...n, data: { ...(n.data || {}), nodeData: nextNodeData } };
+              }
+              return n;
+            } catch (e) { return n; }
+          });
+          nodesRef.current = quick;
+          try { window.__TIMINGS = window.__TIMINGS || {}; window.__TIMINGS.ptap = window.__TIMINGS.ptap || {}; window.__TIMINGS.ptap.setNodes = Date.now(); } catch (e) {}
+          try {
+            if (rfInstance && typeof rfInstance.setNodes === 'function') rfInstance.setNodes(quick);
+            else setNodes([...quick]);
+          } catch (e) { try { setNodes([...quick]); } catch (er) {} }
+
+          // deferred full mapping
+          setTimeout(() => {
+            try {
+              const updated = (nodesRef.current || []).map((n) => {
+                try {
+                  if (quickMatchedPtap.has(n.id)) return n;
+                  const nd = (n.data && n.data.nodeData) ? { ...(n.data.nodeData) } : (n.data || {});
+                  let nextNodeData = { ...nd };
+
+                  const shapeTag = getExactMackenflocTagForNode(n, nextNodeData, map);
+                  const resolvedShapeTag = resolveLivePtapTagForNode(n, map, shapeTag);
+                  const runtimeMatch = findMetricVariableForNode(n, map);
+                  if (resolvedShapeTag || runtimeMatch.tag) {
+                    const variable = runtimeMatch.variable || (resolvedShapeTag && map && map[resolvedShapeTag] ? map[resolvedShapeTag] : null);
+                    const metricText = _formatMetric(variable);
+                    let metricLabel = null;
+                    const finalTag = runtimeMatch.tag || resolvedShapeTag || '';
+                    try {
+                      if (String(finalTag || '').includes('MACKENFLOC')) {
+                        const match = String(finalTag || '').match(/MACKENFLOC[_-]?P?([0-9]+)[_-]?T?([0-9]+)/i);
+                        if (match) {
+                          metricLabel = `Mackenfloc P${match[1]} T${match[2]}`;
+                        } else {
+                          metricLabel = 'Mackenfloc';
+                        }
+                      } else if (String(finalTag || '').includes('PARSHALL') || String(finalTag || '').includes('CREAGER')) {
+                        metricLabel = 'Caudal';
+                      }
+                    } catch (e) {}
+                    const isMacken = String(finalTag || '').toUpperCase().includes('MACKENFLOC');
+                    nextNodeData = { ...nextNodeData, ptapMetricText: metricText || null, ptapMetricLabel: metricText ? (metricLabel || null) : null, ptapMetricAbove: isMacken ? false : true, ptapMetricRaw: variable || null };
+                    return { ...n, data: { ...(n.data || {}), nodeData: nextNodeData } };
+                  }
+
+                  const nodeLabel = ((nd && (nd.label || nd.display_name || nd.customName || nd.nombre)) || n.label || '') + '';
+                  const labelKey = (nodeLabel || '').toString().trim().toUpperCase();
+                  if (labelKey) {
+                    for (const [tag, variable] of Object.entries(map || {})) {
+                      try {
+                        const tUpper = String(tag || '').toUpperCase();
+                        const normalizedLabel = labelKey.replace(/\s+/g, '_');
+                        const isChembeMetric = String(n.id || nd.id || '').trim() === 'ptap-chembe';
+                        if (tUpper.includes(normalizedLabel) || tUpper.includes(labelKey)) {
+                          const metricText = _formatMetric(variable);
+                          if (metricText !== null && metricText !== undefined && metricText !== '') {
+                            nextNodeData = {
+                              ...nextNodeData,
+                              ptapMetricText: metricText,
+                              ptapMetricAbove: !isChembeMetric ? true : true,
+                              ptapMetricLabel: null,
+                              ptapMetricRaw: variable || null,
+                            };
+                            break;
+                          }
+                        }
+                      } catch (e) {}
+                    }
+                  }
+
+                  return { ...n, data: { ...(n.data || {}), nodeData: nextNodeData } };
+                } catch (e) { return n; }
+              });
+              nodesRef.current = updated;
+              try {
+                if (rfInstance && typeof rfInstance.setNodes === 'function') rfInstance.setNodes(updated);
+                else setNodes([...updated]);
+              } catch (e) { try { setNodes([...updated]); } catch (er) {} }
+            } catch (e) {}
+          }, 0);
+        } catch (e) {}
+      };
+
+      _ptapMetricsListeners.add(listener);
+      // initial load
+      _loadPtapMetrics().then((m) => { try { listener(m); } catch (e) {} });
+      return () => { try { _ptapMetricsListeners.delete(listener); } catch (e) {} };
+    } catch (e) {}
+  }, []);
+
 
   // monitor queue size and ws status periodically for UI
   useEffect(() => {
@@ -1678,11 +2625,8 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           try {
             // Apply remote state in-memory to avoid disrupting user's layout; do not overwrite localStorage unless autosave enabled
             try {
-              const locked = (function() { try { return localStorage.getItem('district_locked') === '1'; } catch (e) { return false; } })();
-              if (mounted && typeof applyRemoteState === 'function' && !locked) {
+              if (mounted && typeof applyRemoteState === 'function') {
                 applyRemoteState(remote);
-              } else if (locked) {
-                console.log('[INIT] remote state load skipped because district_locked=1');
               }
             } catch (e) {}
           } catch (e) {}
@@ -1733,8 +2677,18 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   }, []);
   const pastRef = useRef([]);
   const futureRef = useRef([]);
+  // Saved snapshots history (server-confirmed versions) used by Undo/Redo.
+  // Transient drag/edit state must not feed the saved history stack.
+  const savedPastRef = useRef([]);
+  const savedFutureRef = useRef([]);
+  const clearTransientHistory = useCallback(() => {
+    pastRef.current = [];
+    futureRef.current = [];
+  }, []);
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  // Guard to mark short-lived remote application so persistence handlers can ignore
+  const applyingRemoteRef = useRef(false);
   // Ref estable para onNodeSelect — evita recrear callbacks cuando el padre re-renderiza
   const onNodeSelectRef = useRef(onNodeSelect);
   useEffect(() => { onNodeSelectRef.current = onNodeSelect; }, [onNodeSelect]);
@@ -1749,9 +2703,8 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
   const moveNode = useCallback((id, dx, dy) => {
     setNodes((nds) => {
-      const before = nds.map(n => ({ id: n.id, position: n.position }));
-      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
-      futureRef.current = [];
+      // Transient drag/move edits are intentionally not part of the saved undo stack.
+      clearTransientHistory();
       const updated = nds.map(n => n.id === id ? ({ ...n, position: { x: (n.position.x || 0) + dx, y: (n.position.y || 0) + dy } }) : n);
       try {
         // Do not persist on each immediate move; mark as dirty so the parent UI
@@ -1764,27 +2717,106 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
   const persistDistrictState = useCallback(async (nextNodes = nodesRef.current, nextEdges = edgesRef.current, options = {}) => {
     try {
-      // Use local cache as baseline; do NOT fetch remote authoritative state here
-      const baseline = readDiagramState();
+      // If we're currently applying a remote authoritative state, do not persist.
+      if (applyingRemoteRef.current) {
+        try { console.debug('[DIAGRAM] persistDistrictState suppressed due to remote application'); } catch (e) {}
+        return;
+      }
+
+      const currentNodes = Array.isArray(nodesRef.current) ? nodesRef.current : [];
+      const currentEdges = Array.isArray(edgesRef.current) ? edgesRef.current : [];
+      const resolvedNextNodes = Array.isArray(nextNodes) ? nextNodes : currentNodes;
+      const resolvedNextEdges = Array.isArray(nextEdges) ? nextEdges : currentEdges;
+
+      const currentNodeKeys = currentNodes.map((n) => n && n.id).filter(Boolean).join('|');
+      const nextNodeKeys = resolvedNextNodes.map((n) => n && n.id).filter(Boolean).join('|');
+      const currentEdgeKeys = currentEdges.map((e) => e && e.id).filter(Boolean).join('|');
+      const nextEdgeKeys = resolvedNextEdges.map((e) => e && e.id).filter(Boolean).join('|');
+
+      const staleSnapshot = !!(
+        (currentNodeKeys && nextNodeKeys && currentNodeKeys !== nextNodeKeys) ||
+        (currentNodeKeys && !nextNodeKeys && currentNodes.length > 0) ||
+        (currentEdgeKeys && nextEdgeKeys && currentEdgeKeys !== nextEdgeKeys)
+      );
+
+      const authoritativeNodes = (!options.force && staleSnapshot) ? currentNodes : resolvedNextNodes;
+      const authoritativeEdges = (!options.force && staleSnapshot) ? currentEdges : resolvedNextEdges;
+
+      // Use local cache as baseline by default; caller can request skip via options.skipReadBaseline
+      const baseline = options.skipReadBaseline ? {} : readDiagramState();
       const raw = { ...(baseline || {}) };
+      const hiddenIds = new Set(Array.isArray(options.hiddenNodeIds) ? options.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== '') : []);
+      const deletedIds = new Set(Array.isArray(options.deletedNodeIds) ? options.deletedNodeIds.filter((id) => id != null && String(id).trim() !== '') : []);
+      const persistedRemovedIds = new Set([
+        ...(Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== '') : []),
+        ...(Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds.filter((id) => id != null && String(id).trim() !== '') : []),
+        ...hiddenIds,
+        ...deletedIds,
+      ]);
       const savedNodes = {};
-      (nextNodes || []).forEach((n) => {
+      (authoritativeNodes || []).forEach((n) => {
         const prev = raw.nodes && raw.nodes[n.id] && typeof raw.nodes[n.id] === 'object' ? raw.nodes[n.id] : {};
         savedNodes[n.id] = getPersistedNodeEntry(n, prev);
       });
-      raw.nodes = savedNodes;
-      raw.edges = Array.isArray(nextEdges) ? nextEdges : [];
-      raw.hiddenNodeIds = Array.isArray(options.hiddenNodeIds) ? options.hiddenNodeIds : (Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds : []);
-      raw.deletedNodeIds = Array.isArray(options.deletedNodeIds) ? options.deletedNodeIds : (Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds : []);
-      // Only persist to localStorage/server when autosave is enabled.
-      if (autoSaveEnabledRef.current) {
+      raw.nodes = Object.fromEntries(Object.entries(savedNodes).filter(([id]) => !persistedRemovedIds.has(id)));
+      raw.edges = Array.isArray(authoritativeEdges) ? authoritativeEdges.filter((edge) => {
+        const source = edge && edge.source != null ? String(edge.source) : '';
+        const target = edge && edge.target != null ? String(edge.target) : '';
+        return !persistedRemovedIds.has(source) && !persistedRemovedIds.has(target);
+      }) : [];
+      // hiddenNodeIds: allow removal or explicit set via options
+      if (Array.isArray(options.hiddenNodeIds)) {
+        raw.hiddenNodeIds = options.hiddenNodeIds;
+      } else if (Array.isArray(options.removeHiddenNodeIds)) {
+        const existing = Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds : [];
+        raw.hiddenNodeIds = existing.filter(id => !((options.removeHiddenNodeIds || []).includes(id)));
+      } else {
+        raw.hiddenNodeIds = Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds : [];
+      }
+
+      // deletedNodeIds: support append/overwrite semantics
+      if (Array.isArray(options.deletedNodeIds) && options.appendDeletedIds) {
+        const existingDeleted = Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds : [];
+        raw.deletedNodeIds = [...new Set([...(existingDeleted || []), ...(options.deletedNodeIds || [])].filter(id => id != null && String(id).trim() !== ''))];
+      } else if (Array.isArray(options.deletedNodeIds)) {
+        raw.deletedNodeIds = options.deletedNodeIds;
+      } else {
+        raw.deletedNodeIds = Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds : [];
+      }
+
+      const finalRemovedIds = new Set([
+        ...(Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== '') : []),
+        ...(Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds.filter((id) => id != null && String(id).trim() !== '') : []),
+      ]);
+      raw.nodes = Object.fromEntries(Object.entries(raw.nodes).filter(([id]) => !finalRemovedIds.has(id)));
+      raw.edges = Array.isArray(raw.edges) ? raw.edges.filter((edge) => {
+        const source = edge && edge.source != null ? String(edge.source) : '';
+        const target = edge && edge.target != null ? String(edge.target) : '';
+        return !finalRemovedIds.has(source) && !finalRemovedIds.has(target);
+      }) : [];
+      // allow callers to force a server save even if autosave is disabled
+      // and optionally set a global district lock flag that prevents remote updates
+      const forceSave = !!options.force;
+      const setLocked = !!options.locked;
+      if (setLocked) {
+        try { raw.district_locked = 1; } catch (e) {}
+        try { localStorage.setItem('district_locked', '1'); } catch (e) {}
+      }
+      // Always persist changes — deletes, renames, and moves should always save
+      if (true) {
         // Validate before attempting server save
         try {
           if (!_validateBeforeSave(raw, baseline)) {
             console.warn('[DIAGRAM] Persist aborted: payload failed validation');
             try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
           } else {
-            writeDiagramState(raw);
+            // Pass through diagnostic op id if present
+            try {
+              if (typeof window !== 'undefined' && window.__TRACE_NODE_ID) {
+                try { console.debug('[TRACE] persistDistrictState preparing payload for', window.__TRACE_NODE_ID, (raw && raw.nodes) ? raw.nodes[window.__TRACE_NODE_ID] : null); } catch (e) {}
+              }
+            } catch (e) {}
+            writeDiagramState(raw, options || {});
             try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
           }
         } catch (e) { /* validation errors -> mark dirty */ try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (err) {} }
@@ -1798,6 +2830,9 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const applyNodeRename = useCallback((id, label) => {
     const clean = (label || '').replace(/\s+/g, ' ').trim();
     if (!clean) return;
+
+    const opId = `rename:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+    try { console.debug('[DIAG] applyNodeRename start', opId, 'id=', id, 'newLabel=', clean); } catch (e) {}
 
     const nextNodes = (nodesRef.current || []).map((n) => {
       if (n.id !== id) return n;
@@ -1836,6 +2871,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           customName: nextLabel,
           nameLocked: true,
           label: nextLabel,
+          openEditor: false,
           display_name: nextLabel,
           nombre: nextLabel,
           originalName,
@@ -1849,7 +2885,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
     setNodes(nextNodes);
     nodesRef.current = nextNodes;
-    persistDistrictState(nextNodes, edgesRef.current);
+    try { console.debug('[DIAG] applyNodeRename: post-update nodesRef snapshot for', id, nodesRef.current.find(n=>n.id===id)); } catch (e) {}
+    // Persist rename using the current React Flow state as authoritative
+    // and avoid reading baseline which could overwrite the new label.
+    persistDistrictState(nextNodes, edgesRef.current, { skipReadBaseline: true, _diagOpId: opId });
+    // UI update is handled by updating nodesRef.current and setNodes above.
   }, [persistDistrictState]);
 
   const changeSelectedNodeColor = useCallback((color, targetId = selectedNodeId) => {
@@ -1875,10 +2915,66 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         };
       });
       nodesRef.current = updated;
-      persistDistrictState(updated, edgesRef.current);
+      try { const opId = `color:${Date.now()}-${Math.random().toString(36).slice(2,7)}`; console.debug('[DIAG] changeSelectedNodeColor', opId, 'id=', idToUpdate, 'color=', color); persistDistrictState(updated, edgesRef.current, { _diagOpId: opId }); } catch (e) {}
       return updated;
     });
   }, [selectedNodeId, persistDistrictState]);
+
+  const changeSelectedNodeShape = useCallback((targetId = selectedNodeId, nextShapeType = null) => {
+    const idToUpdate = targetId || selectedNodeId;
+    const nextType = String(nextShapeType || '').trim();
+    if (!idToUpdate || !nextType) return false;
+
+    const currentNode = (nodesRef.current || []).find((n) => n.id === idToUpdate) || null;
+    if (!currentNode || currentNode.type !== 'shape') return false;
+
+    const sourceData = (currentNode.data && currentNode.data.nodeData) || (currentNode.data || {});
+    const currentShapeType = String(sourceData.shapeType || currentNode.shapeType || '').trim();
+    if (currentShapeType === nextType) return false;
+
+    const updated = (nodesRef.current || []).map((n) => {
+      if (n.id !== idToUpdate) return n;
+      const nextNodeData = {
+        ...(n.data && n.data.nodeData ? n.data.nodeData : (n.data || {})),
+        shapeType: nextType,
+      };
+      return {
+        ...n,
+        type: 'shape',
+        data: {
+          ...(n.data || {}),
+          shapeType: nextType,
+          nodeData: nextNodeData,
+        },
+      };
+    });
+
+    nodesRef.current = updated;
+    setNodes([...updated]);
+    try { persistDistrictState(updated, edgesRef.current); } catch (e) {}
+    return true;
+  }, [selectedNodeId, persistDistrictState]);
+
+  // Set a manual percentage for a single node. Persist minimal config only.
+  const setNodeManualPercentage = useCallback((id, pct) => {
+    if (!id) return;
+    const parsed = Number.isFinite(Number(pct)) ? Number(pct) : null;
+    const updated = (nodesRef.current || []).map((n) => {
+      if (n.id !== id) return n;
+      const sourceData = (n.data && n.data.nodeData) || (n.data || {});
+      const nivel = Number.isFinite(Number(sourceData.valor_m ?? sourceData.nivel)) ? Number(sourceData.valor_m ?? sourceData.nivel) : null;
+      const manual_rebose_override = (parsed != null && nivel != null && parsed > 0) ? Number((nivel * 100) / parsed) : null;
+      const nextNodeData = {
+        ...(sourceData || {}),
+        manual_porcentaje: parsed,
+        manual_rebose_override: manual_rebose_override,
+      };
+      return { ...n, data: { ...(n.data || {}), nodeData: nextNodeData, ...nextNodeData } };
+    });
+    nodesRef.current = updated;
+    try { setNodes([...updated]); } catch (e) {}
+    try { persistDistrictState(updated, edgesRef.current); } catch (e) {}
+  }, [persistDistrictState]);
 
   const toggleLockSelectedNode = useCallback(() => {
     try {
@@ -1933,10 +3029,12 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       saved.nodes = saved.nodes || {};
       for (const id of Object.keys(saved.nodes)) saved.nodes[id] = { ...(saved.nodes[id] || {}), lockedPosition: false };
       try { if (autoSaveEnabledRef.current) localStorage.setItem('district_state', JSON.stringify(saved)); } catch (e) {}
+      try { localStorage.setItem('district_locked', '0'); } catch (e) {}
+      try { persistDistrictState(nodesRef.current, edgesRef.current, { force: true, locked: false }); } catch (e) {}
     } catch (e) { console.warn('[DISTRICT] editUnlockAllNodes failed', e && e.message); }
   }, [rfInstance]);
 
-  const saveAndLockAllNodes = useCallback(() => {
+  const saveAndLockAllNodes = useCallback(async () => {
     try {
       // Obtener nodos actuales de ReactFlow (posiciones exactas donde el usuario los dejó)
       const currentNodes = rfInstance && typeof rfInstance.getNodes === 'function'
@@ -1951,8 +3049,35 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
 
-      // Persistir con las posiciones actuales exactas
-      try { persistDistrictState(updated, edgesRef.current); } catch (e) {}
+      // Persistir con las posiciones actuales exactas (local cache)
+      try { persistDistrictState(updated, edgesRef.current, { force: true, locked: true }); } catch (e) {}
+
+      // Also attempt immediate server save using the exact current nodes+edges
+      try {
+        const payload = {};
+        payload._updatedAt = new Date().toISOString();
+        payload.nodes = {};
+        try {
+          const curNodes = rfInstance && typeof rfInstance.getNodes === 'function' ? rfInstance.getNodes() : (nodesRef.current || []);
+          for (const n of (curNodes || [])) {
+            // build persisted entry using same helper so fields match server expectations
+            try { payload.nodes[n.id] = getPersistedNodeEntry(n, (readDiagramState().nodes||{})[n.id] || {}); } catch (e) { payload.nodes[n.id] = getPersistedNodeEntry(n, {}); }
+          }
+        } catch (e) { /* fallback to nodesRef */
+          for (const n of (nodesRef.current || [])) {
+            payload.nodes[n.id] = getPersistedNodeEntry(n, {});
+          }
+        }
+        payload.edges = Array.isArray(edgesRef.current) ? edgesRef.current : [];
+        payload.hiddenNodeIds = (readDiagramState().hiddenNodeIds) || [];
+        payload.deletedNodeIds = (readDiagramState().deletedNodeIds) || [];
+        payload.district_locked = 1;
+        try {
+          await diagramService.saveState(payload);
+          console.log('[DIAGRAM] immediate exact save completed, reloading page');
+          try { window.location.reload(); } catch (e) { console.log('[DIAGRAM] reload failed', e && e.message); }
+        } catch (err) { console.warn('[DIAGRAM] immediate exact save failed', err && err.message); }
+      } catch (e) { console.warn('[DIAGRAM] build exact payload failed', e && e.message); }
     } catch (e) { console.warn('[DISTRICT] saveAndLockAllNodes failed', e && e.message); }
   }, [rfInstance, persistDistrictState]);
 
@@ -1972,7 +3097,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
-      persistDistrictState(updated, edgesRef.current);
+      try { const opId = `rotate:${Date.now()}-${Math.random().toString(36).slice(2,7)}`; console.debug('[DIAG] rotateSelectedNode', opId, 'id=', targetId, 'direction=', direction); persistDistrictState(updated, edgesRef.current, { _diagOpId: opId }); } catch (e) {}
       try { console.debug('[DistrictFlow] rotateSelectedNode applied for', targetId, 'rotation=', (updated.find(x => x.id === targetId) || {}).rotation); } catch (e) {}
     } catch (e) { console.error(e); }
   }, [selectedNodeId, persistDistrictState]);
@@ -1993,10 +3118,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     });
   }, [selectedNodeId, persistDistrictState]);
 
-  const persistConnection = useCallback((nextEdges) => {
+  const persistConnection = useCallback((nextEdges, options = {}) => {
     try {
       // Persist via the central persistDistrictState so it's guarded by autosave preference
-      persistDistrictState(nodesRef.current, nextEdges || []);
+      persistDistrictState(nodesRef.current, nextEdges || [], options);
     } catch (e) {}
   }, [getPersistedNodeEntry, readDiagramState, writeDiagramState]);
 
@@ -2015,17 +3140,32 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
-      persistDistrictState(updated, edgesRef.current);
+      // Do NOT persist on immediate size change; explicit save via `Guardar` must be used
       try { console.debug('[DistrictFlow] resizeSelectedNode applied for', targetId, 'w,h=', (updated.find(x => x.id === targetId) || {}).width, (updated.find(x => x.id === targetId) || {}).height); } catch (e) {}
     } catch (e) { console.error(e); }
   }, [selectedNodeId, persistDistrictState]);
+
+  // Independent width / height controls (runtime-only until explicit save)
+  const changeSelectedWidth = useCallback((delta = 0) => {
+    try {
+      if (!selectedNodeId) return;
+      resizeSelectedNode(selectedNodeId, delta, 0);
+    } catch (e) {}
+  }, [selectedNodeId, resizeSelectedNode]);
+
+  const changeSelectedHeight = useCallback((delta = 0) => {
+    try {
+      if (!selectedNodeId) return;
+      resizeSelectedNode(selectedNodeId, 0, delta);
+    } catch (e) {}
+  }, [selectedNodeId, resizeSelectedNode]);
 
   const updateSelectedConnectionStyle = useCallback((edgeId = selectedEdgeId, nextStyle = {}) => {
     if (!edgeId) return;
     const updated = (edgesRef.current || []).map((e) => e.id === edgeId ? ({ ...e, style: { ...(e.style || {}), ...(nextStyle || {}) } }) : e);
     setEdges(updated);
     edgesRef.current = updated;
-    try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
+    try { const opId = `edge-style:${Date.now()}-${Math.random().toString(36).slice(2,7)}`; console.debug('[DIAG] updateSelectedConnectionStyle', opId, 'edge=', edgeId, 'style=', nextStyle); persistDistrictState(nodesRef.current, updated, { _diagOpId: opId }); } catch (e) {}
   }, [selectedEdgeId, readDiagramState, writeDiagramState]);
 
   const updateSelectedEdgeLabel = useCallback((edgeId = selectedEdgeId, newLabel = '') => {
@@ -2033,7 +3173,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     const updated = (edgesRef.current || []).map((e) => e.id === edgeId ? ({ ...e, label: newLabel }) : e);
     setEdges(updated);
     edgesRef.current = updated;
-    try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
+    try { const opId = `edge-label:${Date.now()}-${Math.random().toString(36).slice(2,7)}`; console.debug('[DIAG] updateSelectedEdgeLabel', opId, 'edge=', edgeId, 'label=', newLabel); persistDistrictState(nodesRef.current, updated, { _diagOpId: opId }); } catch (e) {}
   }, [selectedEdgeId, readDiagramState, writeDiagramState]);
 
   const upsertOrToggleConnection = useCallback((sourceId, targetId) => {
@@ -2050,10 +3190,10 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       // include specific handle attachments if previously chosen
       ...(connectPendingHandleRef.current && connectPendingHandleRef.current.source === sourceId && connectPendingHandleRef.current.sourceHandle ? { sourceHandle: connectPendingHandleRef.current.sourceHandle } : {}),
       ...(connectPendingHandleRef.current && connectPendingHandleRef.current.target === targetId && connectPendingHandleRef.current.targetHandle ? { targetHandle: connectPendingHandleRef.current.targetHandle } : {}),
-      markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#000', width: 10, height: 10 },
       type: defaultEdgeType || 'step',
       animated: false,
-      style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+      style: { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round' },
     };
 
     if (connectDate) {
@@ -2121,31 +3261,13 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     const targetId = overriddenId || selectedNodeId;
     if (!targetId) return false;
 
-    // Guardar para Deshacer/Undo
-    try {
-      const before = (nodesRef.current || []).map(n => ({ id: n.id, position: n.position }));
-      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
-      futureRef.current = [];
-    } catch (e) {}
+    // In transient editing, do not feed saved undo history.
+    clearTransientHistory();
 
     const nextNodes = (nodesRef.current || []).filter((n) => n.id !== targetId);
     const nextEdges = (edgesRef.current || []).filter((edge) => edge.source !== targetId && edge.target !== targetId);
 
-    const state = readDiagramState();
-    const filteredSavedNodes = { ...(state.nodes || {}) };
-    delete filteredSavedNodes[targetId];
-    const filteredSavedHidden = (Array.isArray(state.hiddenNodeIds) ? state.hiddenNodeIds : []).filter((id) => id !== targetId);
-    const deletedList = Array.isArray(state.deletedNodeIds) ? state.deletedNodeIds : [];
-    const nextDeletedIds = [...new Set([...deletedList, targetId].filter((id) => id != null && String(id).trim() !== ''))];
-
-    const nextState = {
-      ...state,
-      nodes: filteredSavedNodes,
-      edges: nextEdges,
-      hiddenNodeIds: filteredSavedHidden,
-      deletedNodeIds: nextDeletedIds,
-    };
-
+    // Apply deletion locally first
     setNodes(nextNodes);
     setEdges(nextEdges);
     nodesRef.current = nextNodes;
@@ -2154,7 +3276,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     if (onNodeSelect) onNodeSelect(null);
 
     try {
-      persistDistrictState(nextNodes, nextEdges, { deletedNodeIds: nextDeletedIds, hiddenNodeIds: filteredSavedHidden });
+      // Persist deletion: append to deletedNodeIds and remove from hiddenNodeIds without rehydrating/restoring nodes
+      const opId = `delete-node:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+      try { console.debug('[DIAG] deleteSelectedNode start', opId, 'targetId=', targetId, 'nodesBefore=', (nodesRef.current||[]).length); } catch (e) {}
+      persistDistrictState(nextNodes, nextEdges, { deletedNodeIds: [targetId], appendDeletedIds: true, removeHiddenNodeIds: [targetId], _diagOpId: opId });
+      try { console.debug('[DIAG] deleteSelectedNode persisted, opId=', opId); } catch (e) {}
     } catch (err) { console.warn('[DistrictFlow] persist on delete failed', err && err.message); }
     return true;
   }, [persistDistrictState, readDiagramState, selectedNodeId, writeDiagramState, onNodeSelect]);
@@ -2162,29 +3288,73 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   // Apply remote persisted state incrementally without reloading the page
   const applyRemoteState = useCallback((remote) => {
     try {
+      try { console.debug('[REMOTE APPLY] remote keys:', remote && typeof remote === 'object' ? Object.keys(remote).length : 0, 'nodesType:', remote && remote.nodes ? typeof remote.nodes : 'none'); } catch (e) {}
       if (!remote || typeof remote !== 'object') return;
+      const remoteTs = (remote.updated_at || remote.updatedAt || remote._updatedAt || '').toString();
+      const localRaw = (function() { try { return localStorage.getItem('district_state') || '{}'; } catch (e) { return '{}'; }})();
+      const localState = JSON.parse(localRaw || '{}');
+      const localTs = (localState.updated_at || localState.updatedAt || localState._updatedAt || '').toString();
+      if (remoteTs && localTs && remoteTs < localTs) return;
+
       const remoteNodes = remote.nodes && typeof remote.nodes === 'object' ? remote.nodes : {};
       const remoteEdges = Array.isArray(remote.edges) ? remote.edges : [];
+      const hiddenNodeIds = Array.isArray(remote.hiddenNodeIds) ? remote.hiddenNodeIds.filter((id) => id != null && String(id).trim() !== '') : [];
+      const deletedNodeIds = Array.isArray(remote.deletedNodeIds) ? remote.deletedNodeIds.filter((id) => id != null && String(id).trim() !== '') : [];
+      const removedIds = new Set([...hiddenNodeIds, ...deletedNodeIds]);
 
-      const sanitizedRemote = Object.fromEntries(Object.entries(remoteNodes).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)]));
+      const sanitizedRemote = Object.fromEntries(
+        Object.entries(remoteNodes)
+          .filter(([id]) => !removedIds.has(id))
+          .map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)])
+      );
 
-      const current = Array.isArray(nodesRef.current) ? [...nodesRef.current] : [];
+      // Diagnostic tracing: record incoming vs current customName decisions
+      try {
+        if (typeof window !== 'undefined') {
+          window.__REHYDRATION_TRACE = window.__REHYDRATION_TRACE || [];
+          const remoteTsForTrace = remote._updatedAt || remote.updated_at || remote.updatedAt || '';
+          Object.entries(sanitizedRemote).forEach(([rid, rEntry]) => {
+            try {
+              const curr = (nodesRef.current || []).find(n => n.id === rid) || {};
+              const currData = (curr.data && curr.data.nodeData) ? curr.data.nodeData : (curr.data || {});
+              const prevCustom = (currData && currData.customName) || curr.customName || '';
+              const incomingCustom = rEntry && rEntry.customName ? rEntry.customName : '';
+              const decision = ((incomingCustom == null || incomingCustom === '') && prevCustom) ? 'keep-prev' : (incomingCustom ? 'use-incoming' : 'none');
+              window.__REHYDRATION_TRACE.push({ id: rid, prevCustom: prevCustom || null, incomingCustom: incomingCustom || null, decision, remoteTs: remoteTsForTrace, at: new Date().toISOString() });
+            } catch (e) { /* ignore trace errors */ }
+          });
+        }
+      } catch (e) {}
+
+      const current = (Array.isArray(nodesRef.current) ? [...nodesRef.current] : []).filter((n) => !removedIds.has(n.id));
       const existingIds = new Set(current.map(n => n.id));
 
       const updated = current.map((n) => {
         const r = sanitizedRemote[n.id];
         if (!r) return n;
-        // Preserve existing client-side position to avoid moving nodes unexpectedly.
-        const hasLocalPos = n && n.position && n.position.x != null && n.position.y != null;
-        const isLocked = !!(n && n.data && n.data.nodeData && n.data.nodeData.lockedPosition);
-        const position = (hasLocalPos || isLocked) ? n.position : sanitizePosition({ x: r.x, y: r.y });
-        const nodeData = ensureNodeData({ id: n.id, type: r.type, label: r.label, position, data: { ...(n.data && n.data.nodeData ? n.data.nodeData : {}), ...r } });
+        const currentNodeData = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
+        const mergedRemoteEntry = preserveLiveMetricValues(currentNodeData, r);
+        const mergedVisual = preserveLiveMetricValues(n.data || {}, mergedRemoteEntry);
+        const position = sanitizePosition({ x: r.x, y: r.y });
+        const nodeData = ensureNodeData({ id: n.id, type: r.type, label: r.label, position, data: mergedVisual });
+
+        try {
+          const manualPct = Number.isFinite(Number(nodeData.manual_porcentaje)) ? Number(nodeData.manual_porcentaje) : null;
+          const nivelNum = Number.isFinite(Number(nodeData.valor_m ?? nodeData.nivel)) ? Number(nodeData.valor_m ?? nodeData.nivel) : null;
+          if (manualPct != null && nivelNum != null && manualPct > 0) {
+            const recomputed = Number((nivelNum * 100) / manualPct);
+            if (nodeData.manual_rebose_override == null || Number(nodeData.manual_rebose_override) !== recomputed) {
+              nodeData.manual_rebose_override = recomputed;
+            }
+          }
+        } catch (e) {}
+        const visualData = stripRuntimeTelemetry({ ...(n.data || {}), ...mergedVisual });
         return {
           ...n,
           position,
-          customName: r.customName || n.customName || nodeData.customName || '',
-          label: r.label || n.label || nodeData.label || n.id,
-          data: { ...(n.data || {}), ...r, nodeData },
+          customName: nodeData.customName || n.customName || r.customName || '',
+          label: nodeData.label || n.label || r.label || n.id,
+          data: { ...visualData, nodeData },
         };
       });
 
@@ -2193,24 +3363,109 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         if (existingIds.has(id)) continue;
         const position = sanitizePosition({ x: r.x, y: r.y });
         const nodeData = ensureNodeData({ id, type: r.type, label: r.label, position, data: r });
+        try {
+          const manualPct = Number.isFinite(Number(nodeData.manual_porcentaje)) ? Number(nodeData.manual_porcentaje) : null;
+          const nivelNum = Number.isFinite(Number(nodeData.valor_m ?? nodeData.nivel)) ? Number(nodeData.valor_m ?? nodeData.nivel) : null;
+          if (manualPct != null && nivelNum != null && manualPct > 0) {
+            const recomputed = Number((nivelNum * 100) / manualPct);
+            if (nodeData.manual_rebose_override == null || Number(nodeData.manual_rebose_override) !== recomputed) {
+              nodeData.manual_rebose_override = recomputed;
+            }
+          }
+        } catch (e) {}
         updated.push({ id, type: r.type || 'tank', position, customName: r.customName || '', nameLocked: !!r.nameLocked, label: r.label || id, data: { ...r, customName: r.customName || '', label: r.label || id, nodeData } });
       }
 
-      const normalizedEdges = (remoteEdges || []).filter(isValidSavedEdge).map((edge) => normalizeSavedEdge(edge, {
-        animated: !!showFlow,
-        type: 'step',
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-        style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
-      })).filter((edge) => edge && edge.source && edge.target);
+      const normalizedEdges = (remoteEdges || [])
+        .filter((edge) => !removedIds.has(String(edge && edge.source)) && !removedIds.has(String(edge && edge.target)))
+        .filter(isValidSavedEdge)
+        .map((edge) => normalizeSavedEdge(edge, {
+          animated: !!showFlow,
+          type: 'step',
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
+          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+        })).filter((edge) => edge && edge.source && edge.target);
 
-      // Update in-memory and UI state
+      // Update in-memory and UI state.
+      // Remote state is applied only as a view update; it must not trigger a save loop.
+      try { applyingRemoteRef.current = true; } catch (e) {}
+      try { if (serverBackoffRef.current && serverBackoffRef.current.timeoutId) { clearTimeout(serverBackoffRef.current.timeoutId); serverBackoffRef.current.timeoutId = null; } serverBackoffRef.current.attempts = 0; } catch (e) {}
       nodesRef.current = updated;
       edgesRef.current = normalizedEdges;
+      try { console.debug('[REMOTE APPLY] sanitizedRemoteCount=', Object.keys(sanitizedRemote).length, 'updatedLen=', (updated||[]).length, 'edges=', (normalizedEdges||[]).length); } catch (e) {}
+      try {
+        if (typeof window !== 'undefined' && window.__TRACE_NODE_ID) {
+          const t = String(window.__TRACE_NODE_ID);
+          try {
+            const incoming = sanitizedRemote[t] || null;
+            const current = (nodesRef.current || []).find(n=>n.id===t) || null;
+            const updatedNode = (updated || []).find(n=>n.id===t) || null;
+            console.debug('[TRACE] applyRemoteState for', t, 'incoming=', incoming, 'current=', current && (current.data || current.data && current.data.nodeData) , 'updated=', updatedNode && (updatedNode.data || updatedNode.data && updatedNode.data.nodeData));
+          } catch (e) {}
+        }
+      } catch (e) {}
       try { setNodes([...updated]); } catch (e) {}
       try { setEdges(normalizedEdges); } catch (e) {}
+      // After applying remote visual state, proactively fetch live telemetry
+      // for any nodes that lack metric fields so both clients display real data
+      // independently (avoid showing "Sin datos" when server has telemetry).
+      (async () => {
+        try {
+          const res = await tanqueService.getTanques();
+          const list = (res && res.tanques) || [];
+          if (!list || !list.length) return;
+          const map = new Map();
+          for (const t of list) {
+            if (!t) continue;
+            const candidates = [t.tag, t.apiName, t.nombre, t.display_name, t.id];
+            for (const c of candidates) {
+              try { if (c != null && String(c).trim()) map.set(String(c).toLowerCase(), t); } catch (e) {}
+            }
+          }
 
-      // Persist to localStorage only if autosave is enabled (respect user's preference)
-      try { if (autoSaveEnabledRef.current) localStorage.setItem('district_state', JSON.stringify(remote)); } catch (e) {}
+          let changed = false;
+          const catalog = loadCatalog();
+          const mergedNodes = (nodesRef.current || []).map((n) => {
+            try {
+              const nd = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
+              const hasMetrics = nd && (nd.valor_m != null || nd.porcentaje != null || nd.porcentaje_capacidad != null);
+              if (hasMetrics) return n;
+
+              const candidates = [nd.apiName, nd.originalName, nd.tag, nd.display_name, nd.nombre, nd.label, n.id].map(x => String(x || '').toLowerCase());
+              let found = null;
+              for (const c of candidates) { if (!c) continue; if (map.has(c)) { found = map.get(c); break; } }
+              if (!found) return n;
+
+              const mergedApi = (mergeApiTanquesWithCatalog([found || {}], catalog) || [found])[0] || found;
+              const enriched = enrichTankNodeMetrics(mergedApi || {});
+
+              const mergedRemoteEntry = preserveLiveMetricValues(nd, enriched);
+              const mergedVisual = preserveLiveMetricValues(n.data || {}, mergedRemoteEntry);
+              const visualData = stripRuntimeTelemetry({ ...(n.data || {}), ...mergedVisual });
+
+              const updatedNode = {
+                ...n,
+                data: { ...visualData, nodeData: { ...(mergedRemoteEntry || {}) } },
+              };
+              changed = true;
+              return updatedNode;
+            } catch (e) { return n; }
+          });
+
+          if (changed) {
+            nodesRef.current = mergedNodes;
+            try { setNodes([...mergedNodes]); } catch (e) {}
+          }
+        } catch (e) { /* ignore telemetry merge errors */ }
+      })();
+      try { setTimeout(() => { applyingRemoteRef.current = false; }, 1200); } catch (e) {}
+      try { suppressServerWritesRef.current = true; setTimeout(() => { suppressServerWritesRef.current = false; }, 1500); } catch (e) {}
+
+      // IMPORTANT: Do NOT persist remote state back to server or overwrite localStorage here.
+      // applyRemoteState must only update in-memory UI to reflect authoritative remote state.
+      // Persisting immediately would risk older tabs overwriting newer server state and
+      // cause position churn. The client GUI will save explicitly when the user presses
+      // Save (doSave) which captures React Flow runtime positions.
     } catch (e) { /* ignore */ }
   }, [showFlow]);
 
@@ -2305,9 +3560,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         pendingConnect: false,
       },
     };
-
-    // mark this node to open editor immediately (transient, not persisted)
-    try { openEditorRef.current.add(uniqueId); } catch (e) {}
 
     const nextNodes = [...(nodesRef.current || []), nextNode];
     setNodes(nextNodes);
@@ -2423,6 +3675,104 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     persistDistrictState(nextNodes, edgesRef.current);
   }, [editMode, mode, deleteMode, onNodeSelect, moveNode, handleConnectSelection, duplicateSelectedNode, applyNodeRename, deleteSelectedNode, persistDistrictState]);
 
+  const addTankFromApi = useCallback((tankLike) => {
+    if (!tankLike) return null;
+    const rawName = String(tankLike.display_name || tankLike.nombre || tankLike.label || tankLike.name || tankLike.tag || 'Tanque').trim();
+    const tankTag = String(tankLike.tag || tankLike.apiTag || tankLike.apiName || tankLike.id || rawName).trim();
+    const baseId = String(tankTag || rawName).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `tanque-${Date.now()}`;
+    const id = `tanque-${baseId}`;
+
+    const existing = (nodesRef.current || []).find((node) => {
+      const nodeData = (node.data && node.data.nodeData) ? node.data.nodeData : (node.data || {});
+      const candidates = [tankLike.tag, tankLike.apiName, tankLike.originalName, tankLike.display_name, tankLike.nombre, tankLike.id, rawName]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      const nodeCandidates = [node.id, node.label, nodeData.tag, nodeData.apiName, nodeData.originalName, nodeData.display_name, nodeData.nombre, nodeData.id]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      return candidates.some((candidate) => nodeCandidates.includes(candidate));
+    });
+
+    if (existing) {
+      setSelectedNodeId(existing.id);
+      if (onNodeSelect) onNodeSelect(existing.id);
+      return existing.id;
+    }
+
+    const position = {
+      x: 260 + ((nodesRef.current || []).length % 6) * 140,
+      y: 120 + ((nodesRef.current || []).length % 5) * 110,
+    };
+    const apiPayload = enrichTankNodeMetrics({
+      ...tankLike,
+      display_name: rawName,
+      nombre: rawName,
+      label: rawName,
+      apiName: tankLike.apiName || tankLike.originalName || tankLike.tag || rawName,
+      originalName: tankLike.originalName || tankLike.apiName || tankLike.tag || rawName,
+      tag: tankTag,
+    });
+    const nodeData = ensureNodeData({
+      id,
+      type: 'tank',
+      label: rawName,
+      position,
+      data: {
+        ...apiPayload,
+        id,
+        type: 'tank',
+        label: rawName,
+        customName: rawName,
+        display_name: rawName,
+        nombre: rawName,
+        originalName: tankLike.originalName || tankLike.apiName || tankLike.tag || rawName,
+        apiName: tankLike.apiName || tankLike.originalName || tankLike.tag || rawName,
+        tag: tankTag,
+      },
+    });
+    const nextNode = {
+      id,
+      type: 'tank',
+      position,
+      customName: rawName,
+      nameLocked: false,
+      label: rawName,
+      data: {
+        ...nodeData,
+        id,
+        type: 'tank',
+        label: rawName,
+        customName: rawName,
+        nameLocked: false,
+        display_name: rawName,
+        nombre: rawName,
+        originalName: tankLike.originalName || tankLike.apiName || tankLike.tag || rawName,
+        apiName: tankLike.apiName || tankLike.originalName || tankLike.tag || rawName,
+        tag: tankTag,
+        nodeData,
+        onSelect: (nodeId) => { setSelectedNodeId(nodeId); if (onNodeSelect) onNodeSelect(nodeId); },
+        onMove: (nodeId, dx, dy) => moveNode(nodeId, dx, dy),
+        onConnectNode: (nodeId, pos) => handleConnectSelection(nodeId, pos),
+        onDuplicate: (nodeId) => duplicateSelectedNode(nodeId),
+        onRename: applyNodeRename,
+        onDeleteSelected: (nodeId) => deleteSelectedNode(nodeId),
+        editMode,
+        mode,
+        deleteMode,
+        selected: true,
+        pendingConnect: false,
+      },
+    };
+
+    const nextNodes = [...(nodesRef.current || []), nextNode];
+    setNodes(nextNodes);
+    nodesRef.current = nextNodes;
+    setSelectedNodeId(id);
+    if (onNodeSelect) onNodeSelect(id);
+    persistDistrictState(nextNodes, edgesRef.current);
+    return id;
+  }, [editMode, mode, deleteMode, onNodeSelect, moveNode, handleConnectSelection, duplicateSelectedNode, applyNodeRename, deleteSelectedNode, persistDistrictState]);
+
 
   const addShapeNode = useCallback((shapeType = 'rect') => {
     const id = `forma-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -2479,68 +3829,109 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
   const onConnect = useCallback((params) => {
     try {
-      const before = nodesRef.current.map(n => ({ id: n.id, position: n.position }));
-      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
-      futureRef.current = [];
+      // Keep transient connection edits out of the saved history stack.
+      clearTransientHistory();
       if (!params || !params.source || !params.target || params.source === params.target) return;
       upsertOrToggleConnection(params.source, params.target);
     } catch (e) {}
-  }, [upsertOrToggleConnection]);
+  }, [clearTransientHistory, upsertOrToggleConnection]);
 
   const deleteSelectedConnection = useCallback((edgeId = selectedEdgeId) => {
     const targetId = edgeId || selectedEdgeId;
     if (!targetId) return false;
 
-    try {
-      const before = (nodesRef.current || []).map(n => ({ id: n.id, position: n.position }));
-      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
-      futureRef.current = [];
-    } catch (e) {}
+    clearTransientHistory();
 
     const next = (edgesRef.current || []).filter((edge) => edge.id !== targetId);
     setEdges(next);
     edgesRef.current = next;
     setSelectedEdgeId(null);
-    persistConnection(next);
+    const opId = `delete-edge:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+    try { console.debug('[DIAG] deleteSelectedConnection start', opId, 'edgeId=', targetId); } catch (e) {}
+    persistConnection(next, { _diagOpId: opId });
     return true;
   }, [persistConnection, selectedEdgeId]);
 
   const onEdgesDelete = useCallback((deleted) => {
     if (!deleted || !deleted.length) return;
     try {
-      const before = (nodesRef.current || []).map(n => ({ id: n.id, position: n.position }));
-      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
-      futureRef.current = [];
+      clearTransientHistory();
       const ids = new Set(deleted.map(d => d.id));
       const next = (edgesRef.current || []).filter(e => !ids.has(e.id));
       setEdges(next);
       edgesRef.current = next;
-      persistConnection(next);
+      const opId = `onEdgesDelete:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+      try { console.debug('[DIAG] onEdgesDelete', opId, 'deletedIds=', Array.from(ids)); } catch (e) {}
+      persistConnection(next, { _diagOpId: opId });
       setSelectedEdgeId(null);
     } catch (e) {}
   }, [persistConnection]);
 
-  const doUndo = useCallback(() => {
-    const past = pastRef.current;
-    if (!past.length) return;
-    const last = past.pop();
-    const cur = { nodes: Object.fromEntries((nodesRef.current || []).map(n => [n.id, n.position])), edges: edgesRef.current };
-    futureRef.current.push(cur);
-    const restoredNodes = (nodesRef.current || []).map(n => ({ ...n, position: last.nodes[n.id] || n.position }));
-    setNodes(restoredNodes);
-    setEdges(last.edges || []);
-  }, []);
+  const doUndo = useCallback(async () => {
+    if (savedPastRef.current.length < 2) return false;
+    const currentDesign = buildDesignHistorySnapshot({ nodes: Object.fromEntries((nodesRef.current || []).map((n) => [n.id, getPersistedNodeEntry(n, (readDiagramState().nodes || {})[n.id] || {})])), edges: edgesRef.current || [] });
+    const savedPrevious = savedPastRef.current[savedPastRef.current.length - 2];
+    const currentSaved = savedPastRef.current[savedPastRef.current.length - 1];
+    const payload = {
+      ...buildDesignHistorySnapshot({ nodes: Object.fromEntries(Object.entries(savedPrevious.nodes || {})), edges: savedPrevious.edges || [] }),
+      updated_at: new Date().toISOString(),
+      _updatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const ok = await diagramService.saveState(payload);
+    if (!ok) {
+      console.warn('[DIAGRAM] Undo rejected by server; history preserved');
+      return false;
+    }
+    savedPastRef.current = savedPastRef.current.slice(0, -1);
+    savedFutureRef.current.push(currentSaved);
+    writeDiagramState(payload, { source: 'remote' });
+    const targetNodes = Object.values(payload.nodes || {}).map((entry) => ({
+      id: entry.id,
+      type: entry.type || 'tank',
+      position: { x: Number(entry.x || 0), y: Number(entry.y || 0) },
+      customName: entry.customName || '',
+      label: entry.label || entry.id || 'Sin nombre',
+      data: { ...(entry || {}), customName: entry.customName || '', label: entry.label || entry.id || 'Sin nombre', nodeData: { ...(entry || {}) } },
+    }));
+    nodesRef.current = targetNodes;
+    edgesRef.current = payload.edges || [];
+    setNodes(targetNodes);
+    setEdges(payload.edges || []);
+    return true;
+  }, [getPersistedNodeEntry, readDiagramState, writeDiagramState]);
 
-  const doRedo = useCallback(() => {
-    const future = futureRef.current;
-    if (!future.length) return;
-    const next = future.pop();
-    const cur = { nodes: Object.fromEntries((nodesRef.current || []).map(n => [n.id, n.position])), edges: edgesRef.current };
-    pastRef.current.push(cur);
-    const restoredNodes = (nodesRef.current || []).map(n => ({ ...n, position: next.nodes[n.id] || n.position }));
-    setNodes(restoredNodes);
-    setEdges(next.edges || []);
-  }, []);
+  const doRedo = useCallback(async () => {
+    if (savedFutureRef.current.length === 0) return false;
+    const nextDesign = savedFutureRef.current[savedFutureRef.current.length - 1];
+    const payload = {
+      ...buildDesignHistorySnapshot(nextDesign),
+      updated_at: new Date().toISOString(),
+      _updatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const ok = await diagramService.saveState(payload);
+    if (!ok) {
+      console.warn('[DIAGRAM] Redo rejected by server; history preserved');
+      return false;
+    }
+    savedFutureRef.current = savedFutureRef.current.slice(0, -1);
+    savedPastRef.current.push(nextDesign);
+    writeDiagramState(payload, { source: 'remote' });
+    const targetNodes = Object.values(payload.nodes || {}).map((entry) => ({
+      id: entry.id,
+      type: entry.type || 'tank',
+      position: { x: Number(entry.x || 0), y: Number(entry.y || 0) },
+      customName: entry.customName || '',
+      label: entry.label || entry.id || 'Sin nombre',
+      data: { ...(entry || {}), customName: entry.customName || '', label: entry.label || entry.id || 'Sin nombre', nodeData: { ...(entry || {}) } },
+    }));
+    nodesRef.current = targetNodes;
+    edgesRef.current = payload.edges || [];
+    setNodes(targetNodes);
+    setEdges(payload.edges || []);
+    return true;
+  }, [writeDiagramState]);
 
   const doAutoLayout = useCallback(() => {
     const currentNodes = nodesRef.current || [];
@@ -2695,17 +4086,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         })),
         edges: Array.isArray(runtimeEdges) ? runtimeEdges : (edgesRef.current || []),
       };
-      // Validate before attempting to write to server
-      try {
-        const localBaseline = savedState || {};
-        if (!_validateBeforeSave(saved, localBaseline)) {
-          console.warn('[DIAGRAM] doSave aborted: payload failed validation');
-          try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
-          setSaveMsg('error');
-          setTimeout(() => setSaveMsg(null), 3000);
-          return;
-        }
-      } catch (e) { /* proceed conservatively */ }
+      // Save directly — no validation that could block the save
       writeDiagramState(saved);
       try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
       // Toast no bloqueante — no usa alert() que congela JS
@@ -2714,6 +4095,79 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     } catch (e) {
       setSaveMsg('error');
       setTimeout(() => setSaveMsg(null), 3000);
+    }
+  }, [getPersistedNodeEntry, readDiagramState, writeDiagramState, rfInstance]);
+
+  // Explicit server save flow used by the UI Save button. This captures the
+  // exact runtime state (positions and visual properties), writes it to
+  // localStorage, sends it to the backend and, on success, reloads the page
+  // to ensure the newly persisted snapshot is loaded. Errors do NOT trigger
+  // a reload and keep local changes intact.
+  const doSaveToServer = useCallback(async () => {
+    try {
+      // Lightweight in-page trace array for automated tests (temporary)
+      try { if (!window.__diagTrace) window.__diagTrace = []; window.__diagTrace.push('DO_SAVE_ENTER'); } catch (_) {}
+      console.info('[DIAGRAM TRACE] DO_SAVE_ENTER');
+      // Build authoritative snapshot from the current runtime view the user is seeing.
+      // Do NOT read baseline, localStorage or prior savedState here — use nodesRef/edgesRef exactly.
+      const runtimeNodes = Array.isArray(nodesRef.current) ? nodesRef.current : [];
+      const runtimeEdges = Array.isArray(edgesRef.current) ? edgesRef.current : [];
+
+      const saved = {
+        // intentionally lightweight baseline fields omitted; we only persist nodes/edges
+        nodes: Object.fromEntries((runtimeNodes || []).map(n => {
+          // when persisting via explicit user action, derive persisted entry from node runtime and any existing persisted prev (if present)
+          const prevRaw = (function(){ try { const raw = readDiagramState(); return raw && raw.nodes && raw.nodes[n.id] && typeof raw.nodes[n.id] === 'object' ? raw.nodes[n.id] : {}; } catch(e) { return {}; } })();
+          return [n.id, getPersistedNodeEntry(n, prevRaw)];
+        })),
+        edges: Array.isArray(runtimeEdges) ? runtimeEdges : [],
+      };
+
+      try { window.__diagTrace.push('SNAPSHOT_READY'); } catch(_){}
+      console.info('[DIAGRAM TRACE] SNAPSHOT_READY', { nodes: Object.keys(saved.nodes).length, edges: Array.isArray(saved.edges) ? saved.edges.length : 0 });
+
+      // persist to localStorage immediately (source: local)
+      try { writeDiagramState(saved, { source: 'local' }); } catch (e) {}
+
+      // Debug: trace payload node for traced id before server save
+      try {
+        if (typeof window !== 'undefined' && window.__TRACE_NODE_ID) {
+          try { console.debug('[TRACE] doSaveToServer payload node', window.__TRACE_NODE_ID, saved && saved.nodes ? saved.nodes[window.__TRACE_NODE_ID] : null); } catch (e) {}
+        }
+      } catch (e) {}
+
+      // Perform explicit server save regardless of applyingRemoteRef guard — this is a user-initiated action.
+      try {
+        try { window.__diagTrace.push('SAVE_STATE_CALL'); } catch(_){}
+        console.info('[DIAGRAM TRACE] SAVE_STATE_CALL');
+        const ok = await diagramService.saveState(saved);
+        try { window.__diagTrace.push('SAVE_RESPONSE:' + (ok? 'ok':'false')); } catch(_){}
+        console.info('[DIAGRAM TRACE] SAVE_RESPONSE', { ok });
+        if (!ok) throw new Error('diagramService.saveState returned false');
+      } catch (e) {
+        try { window.__diagTrace.push('SAVE_RESPONSE_ERROR:' + (e && e.message ? e.message : String(e))); } catch(_){}
+        console.info('[DIAGRAM TRACE] SAVE_RESPONSE_ERROR', e && e.message ? e.message : String(e));
+        throw e;
+      }
+
+      // on success, mark as remote baseline so clients do not re-send the same snapshot
+      try { writeDiagramState(saved, { source: 'remote' }); } catch (e) {}
+      try {
+        const currentDesign = buildDesignHistorySnapshot(saved);
+        const lastSaved = savedPastRef.current[savedPastRef.current.length - 1] || null;
+        if (!lastSaved || !snapshotDesignEquals(lastSaved, currentDesign)) {
+          savedPastRef.current.push(currentDesign);
+          savedFutureRef.current = [];
+        }
+      } catch (e) {}
+
+      // reload to fetch authoritative saved state (existing behavior)
+      try { if (!(window && window.__diagTestPauseReload)) { window.location.reload(); } else { console.info('[DIAGRAM TRACE] RELOAD_SKIPPED_FOR_TEST'); } } catch (e) {}
+      return true;
+    } catch (err) {
+      try { setSaveMsg('error'); setTimeout(() => setSaveMsg(null), 3000); } catch (e) {}
+      console.warn('[DIAGRAM] doSaveToServer failed', err);
+      return false;
     }
   }, [getPersistedNodeEntry, readDiagramState, writeDiagramState, rfInstance]);
 
@@ -2737,13 +4191,19 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const onNodesChange = useCallback((changes) => {
     setNodes((nds) => {
       const next = applyNodeChanges(changes, nds);
-      // Siempre mantener nodesRef sincronizado con las posiciones reales de ReactFlow
+      // Always keep the ref in sync with the exact React Flow snapshot before persisting.
       nodesRef.current = next;
+      if (applyingRemoteRef.current) return next;
+      const hasPositionChange = changes.some(c => c.type === 'position' && c.dragging);
+      const hasRemove = changes.some(c => c.type === 'remove');
+      if (hasRemove) {
+        persistDistrictState(next, edgesRef.current, { skipReadBaseline: true, force: true, _diagOpId: `onNodesChange-remove:${Date.now()}-${Math.random().toString(36).slice(2,7)}` });
+        return next;
+      }
       // Solo persistir en localStorage en cambios que NO sean de posición durante drag
       // (la posición final se persiste en onNodeDragStop)
-      const hasPositionChange = changes.some(c => c.type === 'position' && c.dragging);
       if (!hasPositionChange) {
-        persistDistrictState(next, edgesRef.current);
+        persistDistrictState(next, edgesRef.current, { skipReadBaseline: true, _diagOpId: `onNodesChange:${Date.now()}-${Math.random().toString(36).slice(2,7)}` });
       }
       return next;
     });
@@ -2753,149 +4213,184 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges((eds) => {
       const next = applyEdgeChanges(changes, eds);
       edgesRef.current = next;
-      persistDistrictState(nodesRef.current, next);
+      if (!applyingRemoteRef.current) persistDistrictState(nodesRef.current, next);
       return next;
     });
   }, [persistDistrictState]);
 
   const onNodeDragStop = useCallback((event, node) => {
     try {
-      const before = nodesRef.current.map(n => ({ id: n.id, position: n.position }));
-      pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
-      futureRef.current = [];
+      // Drag changes are transient until the user explicitly saves a design snapshot.
+      clearTransientHistory();
 
-      // Actualizar nodesRef con la posición FINAL del nodo arrastrado
-      // ReactFlow ya actualizó su estado interno; reflejamos eso en nodesRef
-      const newNodes = (nodesRef.current || []).map(n =>
-        n.id === node.id ? { ...n, position: { x: node.position.x, y: node.position.y } } : n
-      );
-      nodesRef.current = newNodes;
-      setNodes([...newNodes]);
+      // Use React Flow instance as the source of truth for final positions
+      // (this obtains the exact runtime positions after the drag).
+      const currentNodes = (rfInstance && typeof rfInstance.getNodes === 'function')
+        ? rfInstance.getNodes()
+        : (nodesRef.current || []);
 
-      // Guardar posición inmediatamente en localStorage
-      persistDistrictState(newNodes, edgesRef.current);
+      // Normalize positions to plain numbers and ensure node entries preserved
+      const normalized = (currentNodes || []).map(n => ({
+        ...n,
+        position: { x: Number(n.position?.x || 0), y: Number(n.position?.y || 0) }
+      }));
 
-      // restore overlay visibility after drag
+      nodesRef.current = normalized;
+      // Reflect exact runtime snapshot into React state
+      setNodes([...normalized]);
+
+      // Persist using the exact snapshot; skip reading baseline to avoid overwriting
+      if (!applyingRemoteRef.current) {
+        const opId = `drag:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+        try { console.debug('[DIAG] onNodeDragStop', opId, 'node=', node && node.id, 'rfNodes=', (rfInstance && rfInstance.getNodes) ? (rfInstance.getNodes()||[]).find(n=>n.id===node.id) : null); } catch (e) {}
+        persistDistrictState(normalized, edgesRef.current, { skipReadBaseline: true, _diagOpId: opId });
+      }
       try { setOverlayVisible(true); } catch (e) {}
     } catch (e) {}
-  }, [persistDistrictState]);
+    finally {
+      // Keep the drag guard active long enough to absorb the React Flow post-drag click/selection
+      // sequence. That sequence can otherwise reopen the details drawer even when the drag was legitimate.
+      if (dragMovedRef.current) {
+        suppressClickAfterDragRef.current = true;
+        suppressSelectionAfterDragRef.current = true;
+        dragSuppressUntilRef.current = Date.now() + 500;
+      }
+      _setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      if (onNodeSelect) onNodeSelect(null, null, { openDetails: false });
+      dragStartPositionRef.current = { x: 0, y: 0 };
+      window.setTimeout(() => {
+        dragMovedRef.current = false;
+        suppressClickAfterDragRef.current = false;
+        suppressSelectionAfterDragRef.current = false;
+        dragSuppressUntilRef.current = 0;
+      }, 300);
+    }
+  }, [persistDistrictState, onNodeSelect, _setSelectedNodeId]);
 
-  const onNodeDragStart = useCallback(() => {
-    try { setOverlayVisible(false); } catch (e) {}
+  const onNodeDrag = useCallback((event, node) => {
+    try {
+      const start = dragStartPositionRef.current || { x: 0, y: 0 };
+      const dx = Math.abs((node?.position?.x ?? 0) - (start.x ?? 0));
+      const dy = Math.abs((node?.position?.y ?? 0) - (start.y ?? 0));
+      if (dx > 2 || dy > 2) {
+        dragMovedRef.current = true;
+        suppressClickAfterDragRef.current = true;
+        suppressSelectionAfterDragRef.current = true;
+      }
+    } catch (e) {}
   }, []);
+
+  const onNodeDragStart = useCallback((event, node) => {
+    try {
+      dragMovedRef.current = false;
+      suppressClickAfterDragRef.current = false;
+      suppressSelectionAfterDragRef.current = true;
+      dragSuppressUntilRef.current = Date.now() + 500;
+      dragStartPositionRef.current = {
+        x: Number(node?.position?.x ?? 0),
+        y: Number(node?.position?.y ?? 0),
+      };
+      _setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      if (onNodeSelect) onNodeSelect(null, null, { openDetails: false });
+      setOverlayVisible(false);
+    } catch (e) {}
+  }, [onNodeSelect, _setSelectedNodeId]);
 
   const didInitDiagramRef = useRef(false);
 
+  // No dev fallback here: authoritative state must come from backend only.
+
   useEffect(() => {
     let cancelled = false;
-    const freshApiNodes = Array.isArray(initialNodes) ? initialNodes : [];
-
     const loadInitialDiagramState = async () => {
-      const saved = await readAuthoritativeDiagramState();
+      setBootstrapStatus('loading');
+      let saved = null;
+      try {
+        saved = await readAuthoritativeDiagramState();
+      } catch (e) {
+        // Treat inability to read authoritative state as an error (no fallbacks)
+        setBootstrapStatus('error');
+        console.error('[DIAGRAM] readAuthoritativeDiagramState failed', e && e.message ? e.message : e);
+        return;
+      }
       if (cancelled) return;
-      const hasSavedState = saved && typeof saved === 'object' && (
-        (Object.keys(saved.nodes || {}).length > 0) ||
-        (Array.isArray(saved.edges) && saved.edges.length > 0)
-      );
 
-      if (!didInitDiagramRef.current) {
-        didInitDiagramRef.current = true;
-
-        if (hasSavedState && freshApiNodes.length > 0) {
-        const savedNodesById = new Map(Object.entries(saved.nodes || {}).map(([id, entry]) => [id, sanitizePersistedNodeVisual(entry)]));
-        const deletedIds = Array.isArray(saved.deletedNodeIds) ? saved.deletedNodeIds : [];
-
-        const mergedNodes = freshApiNodes
-          .filter(fn => !(deletedIds.includes(fn.id))) // do not recreate nodes the user deleted
-          .map((freshNode) => {
-            const persistedVisual = savedNodesById.get(freshNode.id) || {};
-            const rawPosition = persistedVisual && (Number.isFinite(Number(persistedVisual.x)) || Number.isFinite(Number(persistedVisual.y)))
-              ? { x: Number(persistedVisual.x), y: Number(persistedVisual.y) }
-              : freshNode.position || { x: 0, y: 0 };
-            const rawNode = { ...(freshNode.data || freshNode), ...persistedVisual, position: rawPosition };
-            const hydrated = ensureNodeData({ id: freshNode.id, type: freshNode.type, label: freshNode.label, position: rawPosition, data: rawNode });
-            const customName = String(persistedVisual.customName || '').trim();
-            const nameLocked = !!persistedVisual.nameLocked;
-            const label = customName || hydrated.label || freshNode.label || freshNode.id;
-            const finalNodeData = { ...hydrated, customName, nameLocked, label, position: sanitizePosition(rawPosition) };
-            return {
-              id: freshNode.id,
-              type: freshNode.type || 'tank',
-              position: sanitizePosition(rawPosition),
-              customName,
-              nameLocked,
-              label,
-              data: { ...rawNode, customName, nameLocked, label, nodeData: finalNodeData },
-            };
-          });
-
-        const mergedNodesMap = new Map((mergedNodes || []).map(n => [n.id, n]));
-
-        // Add any saved nodes that are not present in the API's list
-        for (const [savedId, entry] of Object.entries(saved.nodes || {})) {
-          if (!savedId) continue;
-          if (deletedIds.includes(savedId)) continue;
-          if (mergedNodesMap.has(savedId)) continue;
-          try {
-            const persistedVisual = sanitizePersistedNodeVisual(entry);
-            const rawPosition = { x: Number(persistedVisual.x || 0), y: Number(persistedVisual.y || 0) };
-            const rawNode = { ...persistedVisual, position: rawPosition };
-            const hydrated = ensureNodeData({ id: savedId, type: persistedVisual.type || 'tank', label: persistedVisual.label || savedId, position: rawPosition, data: rawNode });
-            const customName = String(persistedVisual.customName || '').trim();
-            const nameLocked = !!persistedVisual.nameLocked;
-            const label = customName || hydrated.label || persistedVisual.label || savedId;
-            const finalNodeData = { ...hydrated, customName, nameLocked, label, position: sanitizePosition(rawPosition) };
-            const userNode = {
-              id: savedId,
-              type: persistedVisual.type || 'tank',
-              position: sanitizePosition(rawPosition),
-              customName,
-              nameLocked,
-              label,
-              data: { ...persistedVisual, customName, nameLocked, label, nodeData: finalNodeData },
-            };
-            mergedNodes.push(userNode);
-            mergedNodesMap.set(savedId, userNode);
-          } catch (err) {
-            // ignore malformed saved entries
-          }
-        }
-
-        const savedEdges = (Array.isArray(saved.edges) ? saved.edges : [])
-          .filter(isValidSavedEdge)
-          .map((edge) => normalizeSavedEdge(edge, {
-            animated: !!showFlow,
-            type: 'step',
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
-            style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
-          }))
-          .filter((edge) => edge.source && edge.target && !deletedIds.includes(edge.source) && !deletedIds.includes(edge.target));
-
-        nodesRef.current = mergedNodes;
-        edgesRef.current = savedEdges;
-        setNodes(mergedNodes);
-        setEdges(savedEdges);
+      if (saved == null) {
+        // Backend returned a valid empty snapshot or empty body; treat as loadedEmpty
+        setBootstrapStatus('loadedEmpty');
+        nodesRef.current = [];
+        edgesRef.current = [];
+        setNodes([]);
+        setEdges([]);
         return;
       }
 
-        if (hasSavedState && freshApiNodes.length === 0) {
-          const savedNodes = Object.entries(saved.nodes || {}).map(([id, entry]) => {
-            if (!entry || typeof entry !== 'object') return null;
-            const type = entry.type || 'tank';
-            const label = String(entry.customName || entry.label || id).trim() || id;
-            const position = { x: Number.isFinite(Number(entry.x)) ? Number(entry.x) : 0, y: Number.isFinite(Number(entry.y)) ? Number(entry.y) : 0 };
-            const nodeData = ensureNodeData({ id, type, label, position, data: { ...entry, id, customName: entry.customName || '', label } });
-            return {
-              id,
-              type,
-              position,
-              customName: entry.customName || '',
-              label,
-              data: { ...entry, customName: entry.customName || '', label, nodeData },
-            };
-          }).filter(Boolean);
+      const rawNodeEntries = normalizeSavedNodeCollection(saved && saved.nodes ? saved.nodes : []);
+      const rawEdgeEntries = normalizeDiagramEdgeEntries(saved && saved.edges ? saved.edges : []);
+      const hasExplicitSavedStructure = !!saved && typeof saved === 'object' && (
+        Object.prototype.hasOwnProperty.call(saved, 'nodes') ||
+        Object.prototype.hasOwnProperty.call(saved, 'edges') ||
+        Object.prototype.hasOwnProperty.call(saved, 'hiddenNodeIds') ||
+        Object.prototype.hasOwnProperty.call(saved, 'deletedNodeIds') ||
+        Object.keys(saved).length > 0
+      );
+      const normalizedSavedKeys = Object.keys(saved || {}).filter((key) => !['updated_at', '_updatedAt', 'updatedAt'].includes(key));
+      const hasSavedState = hasExplicitSavedStructure && (rawNodeEntries.length > 0 || rawEdgeEntries.length > 0 || normalizedSavedKeys.length > 0);
+      // Respect any explicit saved snapshot, even if it contains an empty
+      // `nodes: []`. A persisted snapshot with empty nodes is a valid
+      // authoritative state (represents an explicitly emptied diagram).
+      // Only fall back to static layout when there is no saved snapshot at all.
+      const useStaticFallback = !saved;
 
-          const savedEdges = (Array.isArray(saved.edges) ? saved.edges : [])
+      const fallbackNodes = (Array.isArray(STATIC_NODES) ? STATIC_NODES : []).map((entry) => {
+        const id = String(entry && entry.id ? entry.id : 'unknown-node');
+        const type = entry && entry.type ? entry.type : 'tank';
+        const label = String(entry && (entry.label || entry.id) ? (entry.label || entry.id) : id).trim() || id;
+        const position = {
+          x: Number.isFinite(Number(entry && entry.position && entry.position.x)) ? Number(entry.position.x) : 0,
+          y: Number.isFinite(Number(entry && entry.position && entry.position.y)) ? Number(entry.position.y) : 0,
+        };
+        const nodeData = ensureNodeData({ id, type, label, position, data: { ...(entry || {}), id, customName: '', label } });
+        return {
+          id,
+          type,
+          position,
+          customName: '',
+          label,
+          data: { ...(entry || {}), customName: '', label, nodeData },
+        };
+      });
+
+      const fallbackEdges = (Array.isArray(STATIC_CONNECTIONS) ? STATIC_CONNECTIONS : [])
+        .filter(isValidSavedEdge)
+        .map((edge) => normalizeSavedEdge(edge, {
+          animated: !!showFlow,
+          type: 'step',
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
+          style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+        }))
+        .filter((edge) => edge && edge.source && edge.target);
+
+      const initialNodes = hasSavedState ? rawNodeEntries.filter(Boolean).map((entry) => {
+        const id = String(entry.id || entry.nodeId || entry.tag || 'unknown-node');
+        const type = entry.type || 'tank';
+        const label = String(entry.customName || entry.label || id).trim() || id;
+        const position = { x: Number.isFinite(Number(entry.x)) ? Number(entry.x) : 0, y: Number.isFinite(Number(entry.y)) ? Number(entry.y) : 0 };
+        const nodeData = ensureNodeData({ id, type, label, position, data: { ...entry, id, customName: entry.customName || '', label } });
+        return {
+          id,
+          type,
+          position,
+          customName: entry.customName || '',
+          label,
+          data: { ...entry, customName: entry.customName || '', label, nodeData },
+        };
+      }) : fallbackNodes;
+
+      const initialEdges = (hasSavedState)
+        ? (Array.isArray(saved && saved.edges) ? saved.edges : [])
             .filter(isValidSavedEdge)
             .map((edge) => normalizeSavedEdge(edge, {
               animated: !!showFlow,
@@ -2903,57 +4398,56 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
               markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
               style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
             }))
-            .filter((edge) => edge.source && edge.target);
+            .filter((edge) => edge && edge.source && edge.target)
+        : fallbackEdges;
 
-          nodesRef.current = savedNodes;
-          edgesRef.current = savedEdges;
-          setNodes(savedNodes);
-          setEdges(savedEdges);
-          return;
-        }
+      // If saved structure exists but contains no explicit node/edge entries,
+      // prefer falling back to the static layout or remote state instead of
+      // aggressively clearing the UI. This avoids situations where an empty
+      // persisted object (e.g. `{ nodes: {} }`) would hide the static nodes
+      // and leave the canvas blank.
 
-        try { console.debug('[DISTRICT DEBUG] initialNodes received:', freshApiNodes.length); } catch (e) {}
-        const sourceNodes = freshApiNodes.length ? freshApiNodes : STATIC_NODES.map(s => {
-          if (s.type === 'plant' || s.type === 'district') return { id: s.id, type: s.type, label: s.label, position: s.position, data: { display_name: s.label } };
-          return { id: s.id, type: 'tank', label: s.label, position: s.position, data: { display_name: s.label, __placeholder: true } };
+      if (!didInitDiagramRef.current) {
+        didInitDiagramRef.current = true;
+        setBootstrapStatus(hasSavedState ? 'loadedWithState' : 'loadedEmpty');
+
+        const removedIds = new Set([
+          ...(Array.isArray(saved && saved.hiddenNodeIds) ? saved.hiddenNodeIds : []),
+          ...(Array.isArray(saved && saved.deletedNodeIds) ? saved.deletedNodeIds : []),
+        ].filter((id) => id != null && String(id).trim() !== ''));
+
+        const savedNodes = initialNodes.filter((entry) => {
+          if (!entry || typeof entry !== 'object') return false;
+          return !removedIds.has(String(entry.id));
         });
-        const n = sourceNodes.map(x => {
-          const resolvedData = ensureNodeData({ id: x.id, type: x.type, label: x.label, position: x.position, data: x.data || x });
-          return {
-            id: x.id,
-            data: { nodeData: resolvedData, onSelect: onNodeSelect },
-            type: x.type === 'tank' ? 'tank' : (x.type === 'plant' ? 'plant' : (x.type === 'district' ? 'district' : (x.type === 'shape' ? 'shape' : 'tank'))),
-            position: x.position,
-          };
-        });
-        const e = (initialEdges || []).map(x => {
-          const source = x.source || x.from || x.fromId || null;
-          const target = x.target || x.to || x.toId || null;
-          return { id: x.id || `${source || 'unknown'}-${target || 'unknown'}`, source, target, label: x.label || x.name || '', style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } };
-        }).filter(ed => ed.source && ed.target);
 
-        const rfNodes = n.map(nd => ({ id: nd.id, type: nd.type, position: nd.position || null, data: nd.data }));
-        const rfEdges = e.map(ed => ({ id: ed.id, source: ed.source, target: ed.target, markerEnd: { type: MarkerType.ArrowClosed, color: '#000' }, animated: false, type: 'step', label: ed.label, style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } }));
-
-        const withControls = rfNodes.map(rn => {
-          const outer = rn.data || {};
-          const candidate = ensureNodeData({ id: rn.id, type: rn.type, label: rn.label, position: rn.position, data: outer.nodeData || outer });
-          const nodeDataWithId = ensureNodeData({ id: rn.id, type: rn.type, label: rn.label, position: rn.position, data: candidate });
-          return { ...rn, data: { ...outer, nodeData: nodeDataWithId } };
-        });
-        nodesRef.current = withControls;
-        edgesRef.current = rfEdges;
-        setNodes(withControls);
-        setEdges(rfEdges);
+        nodesRef.current = savedNodes;
+        edgesRef.current = initialEdges;
+        setNodes(savedNodes);
+        setEdges(initialEdges);
+        try {
+          const initialDesign = buildDesignHistorySnapshot({
+            nodes: Object.fromEntries((savedNodes || []).map((n) => [n.id, getPersistedNodeEntry(n, (saved && saved.nodes && saved.nodes[n.id]) || {})])),
+            edges: initialEdges,
+          });
+          savedPastRef.current = [initialDesign];
+          savedFutureRef.current = [];
+        } catch (e) {}
+        try {
+          if (typeof window !== 'undefined' && window.__TRACE_NODE_ID) {
+            const t = String(window.__TRACE_NODE_ID);
+            try { console.debug('[TRACE] loadInitialDiagramState applied saved node for', t, 'entry=', (savedNodes && savedNodes[t])); } catch (e) {}
+          }
+        } catch (e) {}
         return;
       }
 
-      if (!freshApiNodes.length) return;
+      if (Array.isArray(initialNodes) && initialNodes.length) return;
     };
 
     loadInitialDiagramState();
     return () => { cancelled = true; };
-  }, [initialNodes, initialEdges, readAuthoritativeDiagramState, showFlow]);
+  }, [readAuthoritativeDiagramState, showFlow]);
 
   // Actualización periódica de métricas: solo actualizar datos de API, NUNCA las posiciones
   useEffect(() => {
@@ -2988,7 +4482,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
             const enriched = enrichTankNodeMetrics(found || {});
             const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
 
-            return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData, ...mergedNodeData } };
+            return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData } };
           } catch (e) { return n; }
         });
 
@@ -3120,6 +4614,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   useEffect(() => {
     setNodes((nds) => nds.map(n => ({
       ...n,
+      selected: n.id === selectedNodeId || n.id === connectPendingId,
       data: {
         ...n.data,
         editMode,
@@ -3127,7 +4622,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         deleteMode,
         selected: n.id === selectedNodeId || n.id === connectPendingId,
         pendingConnect: n.id === connectPendingId,
-        onSelect: (id) => { setSelectedNodeId(id); if (onNodeSelect) onNodeSelect(id); },
+        onSelect: (id) => { _setSelectedNodeId(id); if (onNodeSelect) onNodeSelect(id); },
         onMove: (id, dx, dy) => moveNode(id, dx, dy),
         onConnectNode: (id) => handleConnectSelection(id),
         onDuplicate: (id) => duplicateSelectedNode(id),
@@ -3136,18 +4631,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       }
     })));
   }, [selectedNodeId, connectPendingId, editMode, mode, deleteMode, onNodeSelect, moveNode, handleConnectSelection, duplicateSelectedNode, applyNodeRename, deleteSelectedNode]);
-
-  // include transient openEditor hint and callback in node data
-  useEffect(() => {
-    setNodes((nds) => nds.map(n => ({
-      ...n,
-      data: {
-        ...n.data,
-        openEditor: Boolean(openEditorRef.current && openEditorRef.current.has && openEditorRef.current.has(n.id)),
-        onEditorShown: (id) => { try { openEditorRef.current.delete(id); } catch (e) {} },
-      }
-    })));
-  }, []);
 
   // Cuando la API (IBAL) falla, limpiar únicamente los campos dinámicos de los nodos
   useEffect(() => {
@@ -3201,11 +4684,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     setEdges((eds) => eds.map(e => ({
       ...e,
       style: e.id === selectedEdgeId
-        ? { stroke: '#ef4444', strokeWidth: 6, strokeLinecap: 'round' }
-        : { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
+        ? { stroke: '#ef4444', strokeWidth: 4.5, strokeLinecap: 'round' }
+        : { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round' },
       markerEnd: e.id === selectedEdgeId
-        ? { type: MarkerType.ArrowClosed, color: '#ef4444' }
-        : { type: MarkerType.ArrowClosed, color: '#000' },
+        ? { type: MarkerType.ArrowClosed, color: '#ef4444', width: 10, height: 10 }
+        : { type: MarkerType.ArrowClosed, color: '#000', width: 10, height: 10 },
     })));
   }, [selectedEdgeId]);
 
@@ -3285,13 +4768,16 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   useImperativeHandle(ref, () => ({
     doAutoLayout,
     doSave,
+    doSaveToServer,
     doRestoreInitial,
     doViewAll,
     doUndo,
     doRedo,
     toggleShowFlow,
     addDiagramNode,
+    addTankFromApi,
     addShapeNode,
+    changeSelectedNodeShape,
     changeSelectedNodeColor,
     duplicateSelectedNode,
     deleteSelectedNode,
@@ -3307,15 +4793,22 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       try { console.debug('[DistrictFlow] dumpState nodesRef:', nodesRef.current); } catch (e) {}
       try { console.debug('[DistrictFlow] dumpState edgesRef:', edgesRef.current); } catch (e) {}
     },
-    getSelectedNodeId: () => selectedNodeId,
+    getSelectedNodeId: () => selectedNodeIdRef.current || selectedNodeId,
+    getSelectedNode: () => (nodesRef.current || []).find((n) => n.id === (selectedNodeIdRef.current || selectedNodeId)) || null,
+    getNodeById: (id) => (nodesRef.current || []).find((n) => n.id === id) || null,
     getSelectedEdgeId: () => selectedEdgeId,
     getShowFlow: () => showFlow,
+    renameSelectedNode: (id, label) => {
+      const targetId = id || selectedNodeId;
+      if (!targetId) return false;
+      applyNodeRename(targetId, label);
+      return true;
+    },
     deleteSelectedConnection,
     resizeSelectedNode,
     updateSelectedConnectionStyle,
     updateSelectedEdgeLabel,
-    startAutoSave: () => setAutoSaveEnabled(true),
-    stopAutoSave: () => setAutoSaveEnabled(false),
+    // autosave disabled: no start/stop methods exposed
     setDefaultEdgeType: (type) => {
       if (!type) return;
       // Sólo actualizar el valor por defecto para nuevas conexiones.
@@ -3331,29 +4824,16 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         try { persistDistrictState(nodesRef.current, updated); } catch (e2) {}
       } catch (e) { console.error('[DistrictFlow] updateEdgeType error', e && e.message); }
     },
-  }), [doAutoLayout, doSave, doRestoreInitial, doViewAll, doUndo, doRedo, toggleShowFlow, addDiagramNode, addShapeNode, changeSelectedNodeColor, duplicateSelectedNode, deleteSelectedNode, rotateSelectedNode, setSelectedNodeRotation, editUnlockAllNodes, saveAndLockAllNodes, selectedNodeId, selectedEdgeId, showFlow, deleteSelectedConnection]);
+    // Debug helper: return copies of past/future stacks (design-only snapshots)
+    getHistory: () => ({
+      past: Array.isArray(pastRef.current) ? pastRef.current.slice() : [],
+      future: Array.isArray(futureRef.current) ? futureRef.current.slice() : [],
+      savedPast: Array.isArray(savedPastRef.current) ? savedPastRef.current.slice() : [],
+      savedFuture: Array.isArray(savedFutureRef.current) ? savedFutureRef.current.slice() : [],
+    }),
+  }), [doAutoLayout, doSave, doRestoreInitial, doViewAll, doUndo, doRedo, toggleShowFlow, addDiagramNode, addTankFromApi, addShapeNode, changeSelectedNodeShape, changeSelectedNodeColor, duplicateSelectedNode, deleteSelectedNode, rotateSelectedNode, setSelectedNodeRotation, editUnlockAllNodes, saveAndLockAllNodes, selectedNodeId, selectedEdgeId, showFlow, deleteSelectedConnection]);
 
-  // Autosave interval: guarda nodes+edges y viewport cada segundo cuando está habilitado
-  useEffect(() => {
-    if (!autoSaveEnabled) {
-      if (autoSaveTimerRef.current) { clearInterval(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
-      return;
-    }
-    if (autoSaveTimerRef.current) return; // ya corriendo
-    autoSaveTimerRef.current = setInterval(() => {
-      try {
-        persistDistrictState(nodesRef.current, edgesRef.current);
-      } catch (e) {}
-        try {
-        if (rfInstance && typeof rfInstance.getViewport === 'function') {
-          let vp = rfInstance.getViewport();
-          vp = sanitizeViewport(vp);
-          try { localStorage.setItem('district_viewport', JSON.stringify(vp)); } catch (e) {}
-        }
-      } catch (e) {}
-    }, 1000);
-    return () => { if (autoSaveTimerRef.current) { clearInterval(autoSaveTimerRef.current); autoSaveTimerRef.current = null; } };
-  }, [autoSaveEnabled, persistDistrictState, rfInstance]);
+  // No periodic autosave: actualizaciones reales del usuario se persisten por acción explícita.
 
   // Flush pending server save and persist WS queue on unload/navigation
   useEffect(() => {
@@ -3364,15 +4844,44 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 
         // try to send pending server save using Beacon or fetch keepalive
         try {
-          const apiBase = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001/api').replace(/\/$/, '');
-          const url = `${apiBase}/diagram/state`;
-          const payload = pendingServerSaveRef.current || (autoSaveEnabledRef.current ? JSON.parse(localStorage.getItem('district_state') || '{}') : null);
-          if (autoSaveEnabledRef.current && payload) {
-            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-            if (navigator && typeof navigator.sendBeacon === 'function') {
-              try { navigator.sendBeacon(url, blob); } catch (e) {}
+          // Respect suppression guard: when applying remote authoritative state,
+          // we must not issue any server writes (including beacon on unload).
+          if (suppressServerWritesRef.current || applyingRemoteRef.current) {
+            try { console.debug('[DIAGRAM] handleUnload: suppressed server write due to applyingRemote/suppress flag'); } catch (e) {}
+          } else {
+            const apiBase = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001/api').replace(/\/$/, '');
+            const url = `${apiBase}/diagram/state`;
+            // Prefer pending payload if present (most recent local change). Otherwise use persisted local snapshot
+            let payload = null;
+            try {
+              if (pendingServerSaveRef.current) payload = pendingServerSaveRef.current;
+              else if (autoSaveEnabledRef.current) {
+                const raw = JSON.parse(localStorage.getItem('district_state') || 'null');
+                if (raw && typeof raw === 'object') payload = raw; else payload = null;
+              }
+            } catch (e) { payload = null; }
+
+            // Validate payload: only send if it's a structural state (has nodes/edges keys or other keys).
+            // This avoids sending accidental `{}` which would wipe server state.
+            const isValidPayload = (p) => {
+              try {
+                if (!p || typeof p !== 'object') return false;
+                const hasNodesKey = Object.prototype.hasOwnProperty.call(p, 'nodes');
+                const hasEdgesKey = Object.prototype.hasOwnProperty.call(p, 'edges');
+                const hasOtherKey = Object.keys(p).some(k => k !== 'nodes' && k !== 'edges');
+                return hasNodesKey || hasEdgesKey || hasOtherKey;
+              } catch (e) { return false; }
+            };
+
+            if (isValidPayload(payload)) {
+              const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+              if (navigator && typeof navigator.sendBeacon === 'function') {
+                try { navigator.sendBeacon(url, blob); } catch (e) {}
+              } else {
+                try { fetch(url, { method: 'POST', body: JSON.stringify(payload), keepalive: true, headers: { 'Content-Type': 'application/json' } }); } catch (e) {}
+              }
             } else {
-              try { fetch(url, { method: 'POST', body: JSON.stringify(payload), keepalive: true, headers: { 'Content-Type': 'application/json' } }); } catch (e) {}
+              try { console.debug('[DIAGRAM] handleUnload: no valid payload to send (skipped beacon)'); } catch (e) {}
             }
           }
         } catch (e) {}
@@ -3386,63 +4895,14 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, [readDiagramState]);
 
-  const overlayElement = overlayVisible ? (
-    <div
-      ref={overlayRef}
-      style={{ pointerEvents: 'none', position: 'absolute', zIndex: 2000, background: 'transparent', padding: 0, ...(overlayPos.useRight ? { right: overlayPos.right, top: overlayPos.top } : { left: overlayPos.x, top: overlayPos.y }) }}>
-      <div style={{ pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(0,0,0,0.72)', color: '#fff', padding: '6px 8px', borderRadius: 8, fontSize: 12 }}>
-        <div
-          onMouseDown={(e) => {
-            try {
-              draggingRef.current = true;
-              const rect = overlayRef.current.getBoundingClientRect();
-              dragOffsetRef.current = e.clientX - rect.left;
-            } catch (ev) {}
-          }}
-          onTouchStart={(e) => {
-            try {
-              draggingRef.current = true;
-              const rect = overlayRef.current.getBoundingClientRect();
-              const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-              dragOffsetRef.current = clientX - rect.left;
-            } catch (ev) {}
-          }}
-          style={{ pointerEvents: 'auto', cursor: 'grab', padding: '4px', borderRadius: 6, background: 'rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
-          title="Arrastra para mover"
-        >
-          <div style={{ fontSize: 11, fontWeight: 800 }}>WS</div>
-        </div>
-
-        <div style={{ pointerEvents: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <div style={{ fontWeight: 700, pointerEvents: 'none' }}>WS: {wsConnected ? 'Conectado' : 'Desconectado'}</div>
-          <div style={{ pointerEvents: 'none' }}>Cola: {wsQueueSize}</div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 6, pointerEvents: 'auto' }}>
-          <button type="button" onClick={() => { flushSendQueue(); }} style={{ padding: '6px 8px', borderRadius: 6, border: 'none', background: '#2b6cb0', color: '#fff', cursor: 'pointer' }}>Forzar envío</button>
-          <button type="button" onClick={() => { clearSendQueue(); }} style={{ padding: '6px 8px', borderRadius: 6, border: 'none', background: '#b91c1c', color: '#fff', cursor: 'pointer' }}>Vaciar cola</button>
-          <button
-            type="button"
-            onClick={() => { toggleLockSelectedNode(); }}
-            style={{ padding: '6px 8px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#062b1f', cursor: 'pointer' }}
-            title="Bloquear/Desbloquear posición del nodo seleccionado"
-          >
-            {isSelectedNodeLocked() ? 'Desbloquear' : 'Bloquear'}
-          </button>
-          <button type="button" onClick={() => { editUnlockAllNodes(); }} style={{ padding: '6px 8px', borderRadius: 6, border: 'none', background: '#10b981', color: '#fff', cursor: 'pointer' }} title="Editar todo: desbloquear posiciones">Editar todo</button>
-          <button type="button" onClick={() => { saveAndLockAllNodes(); }} style={{ padding: '6px 8px', borderRadius: 6, border: 'none', background: '#0ea5e9', color: '#fff', cursor: 'pointer' }} title="Guardar y fijar posiciones">Guardar y fijar</button>
-        </div>
-      </div>
-    </div>
-  ) : null;
+  // WS overlay UI removed — WS internals remain functional but panel hidden per UX request
+  const overlayElement = null;
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '72vh', position: 'relative' }}>
       {/* WS Queue status overlay (diagnostic) */}
       {/* Always visible overlay container that does not block pointer events by default */}
-      <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, left: 0, pointerEvents: 'none', zIndex: 1999 }}>
-        {overlayElement}
-      </div>
+      {/* WS overlay UI intentionally removed (internals preserved) */}
 
       {/* edit-mode connect date picker */}
       {(editMode && mode === 'connect') ? (
@@ -3457,21 +4917,39 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           <button onClick={() => setConnectDate('')} style={{ fontSize: 12, padding: '4px 6px' }}>Limpiar</button>
         </div>
       ) : null}
+      {/* Compact independent size controls (runtime only; explicit Save persists) */}
+      {(selectedNodeId && editMode) ? (
+        <div style={{ position: 'absolute', right: 12, top: 72, zIndex: 60, background: 'rgba(255,255,255,0.92)', padding: 6, borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.12)', display: 'flex', gap: 6, alignItems: 'center', pointerEvents: 'auto' }}>
+          <button type="button" onMouseDown={e => { e.preventDefault(); e.stopPropagation(); }} onClick={() => changeSelectedWidth(-8)} style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', color: '#0b2447', cursor: 'pointer' }}>Ancho −</button>
+          <button type="button" onMouseDown={e => { e.preventDefault(); e.stopPropagation(); }} onClick={() => changeSelectedWidth(8)} style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', color: '#0b2447', cursor: 'pointer' }}>Ancho +</button>
+          <div style={{ width: 1, height: 28, background: '#e6e6e6' }} />
+          <button type="button" onMouseDown={e => { e.preventDefault(); e.stopPropagation(); }} onClick={() => changeSelectedHeight(-8)} style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', color: '#0b2447', cursor: 'pointer' }}>Alto −</button>
+          <button type="button" onMouseDown={e => { e.preventDefault(); e.stopPropagation(); }} onClick={() => changeSelectedHeight(8)} style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', color: '#0b2447', cursor: 'pointer' }}>Alto +</button>
+        </div>
+      ) : null}
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         onNodeDragStart={onNodeDragStart}
         onConnect={onConnect}
-        onNodeClick={(_, node) => {
+        onNodeClick={(event, node) => {
+          const shouldSuppress = dragMovedRef.current || suppressClickAfterDragRef.current || suppressSelectionAfterDragRef.current || Date.now() < dragSuppressUntilRef.current;
+          if (shouldSuppress) {
+            dragMovedRef.current = false;
+            suppressClickAfterDragRef.current = false;
+            suppressSelectionAfterDragRef.current = false;
+            return;
+          }
           setSelectedEdgeId(null);
           if (editMode && deleteMode) {
             const removed = deleteSelectedNode(node.id);
             if (removed) {
               setConnectPendingId(null);
-              if (onNodeSelect) onNodeSelect(null);
+              if (onNodeSelect) onNodeSelect(null, null);
             }
             return;
           }
@@ -3486,8 +4964,50 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
             return;
           }
 
-          setSelectedNodeId(node.id);
-          if (onNodeSelect) onNodeSelect(node.id);
+          const nextId = node?.id || null;
+          _setSelectedNodeId(nextId);
+          if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: false });
+        }}
+        onSelectionChange={({ nodes: selectedNodes = [] }) => {
+          const shouldSuppress = dragMovedRef.current || suppressClickAfterDragRef.current || suppressSelectionAfterDragRef.current || Date.now() < dragSuppressUntilRef.current;
+          if (shouldSuppress) {
+            dragMovedRef.current = false;
+            suppressClickAfterDragRef.current = false;
+            suppressSelectionAfterDragRef.current = false;
+            return;
+          }
+          if (!initialSelectionIgnoredRef.current) {
+            initialSelectionIgnoredRef.current = true;
+            if (selectedNodes && selectedNodes.length) {
+              try { _setSelectedNodeId(null); } catch (e) {}
+            }
+            return;
+          }
+          const nextNode = selectedNodes && selectedNodes.length ? selectedNodes[0] : null;
+          const nextId = nextNode?.id || null;
+          // If React Flow reports empty selection but onNodeClick already set a valid
+          // selection in this same interaction, don't overwrite it.
+          if (!nextId && selectedNodeIdRef.current) return;
+          _setSelectedNodeId(nextId);
+          if (onNodeSelect) {
+            if (nextId) onNodeSelect(nextId, nextNode, { openDetails: false });
+            else onNodeSelect(null, null, { openDetails: false });
+          }
+        }}
+        onNodeDoubleClick={(event, node) => {
+          try { event.preventDefault(); event.stopPropagation(); } catch (e) {}
+          const shouldSuppress = dragMovedRef.current || suppressClickAfterDragRef.current || suppressSelectionAfterDragRef.current || Date.now() < dragSuppressUntilRef.current;
+          if (shouldSuppress) {
+            dragMovedRef.current = false;
+            suppressClickAfterDragRef.current = false;
+            suppressSelectionAfterDragRef.current = false;
+            return;
+          }
+          try {
+            const nextId = node?.id || null;
+            setSelectedNodeId(nextId);
+            if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: true });
+          } catch (e) {}
         }}
         onEdgeClick={(_, edge) => {
           setSelectedNodeId(null);
@@ -3499,8 +5019,16 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
             return;
           }
         }}
-        onPaneClick={() => {
+        onPaneClick={(event) => {
+          const target = event?.target;
+          const clickedInsideNode = !!(target && typeof target.closest === 'function' && (
+            target.closest('.react-flow__node') || target.closest('.react-flow__node-default') || target.closest('.react-flow__node-tank') || target.closest('.react-flow__node-plant') || target.closest('.react-flow__node-district') || target.closest('.react-flow__node-shape')
+          ));
+          if (clickedInsideNode) return;
+
+          _setSelectedNodeId(null);
           setSelectedEdgeId(null);
+          if (onNodeSelect) onNodeSelect(null, null);
           if (editMode && mode === 'connect') setConnectPendingId(null);
           if (editMode && deleteMode) {
             setConnectPendingId(null);
@@ -3523,12 +5051,13 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         zoomOnScroll={true}
         panOnDrag
         snapToGrid={false}
-        nodesDraggable={diagramMode === 'edit'}
-        elementsSelectable={diagramMode === 'edit'}
-        nodesConnectable={editMode && diagramMode === 'edit'}
-        connectOnClick={editMode && diagramMode === 'edit'}
+        nodesDraggable={true}
+        elementsSelectable={true}
+        nodesConnectable={editMode && (diagramMode === 'edit' || editMode)}
+        connectOnClick={editMode && (diagramMode === 'edit' || editMode)}
         connectionMode="loose"
       >
+          <EdgesOcclusionMask nodes={nodes} />
         <Background gap={16} />
       </ReactFlow>
 
@@ -3549,3 +5078,4 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
 });
 
 export default DistrictFlow;
+

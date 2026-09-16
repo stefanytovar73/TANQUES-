@@ -1,4 +1,4 @@
-import { calculateAutomaticPorcentaje, calculateDisplayPorcentaje } from '../src/config/tankCatalog.js';
+import { calculateAutomaticPorcentaje, calculateDisplayPorcentaje, mergeApiTanquesWithCatalog } from '../src/config/tankCatalog.js';
 
 const cases = [
   { name: 'Alsacia', nivel: 0.87, expected: 35 },
@@ -47,7 +47,37 @@ const apiContractChecks = [
   { label: 'API zero is preserved', tank: { valor_m: 4.78, porcentaje_capacidad: 0 }, expected: 0 },
   { label: 'API null stays null even when a local height could calculate a value', tank: { valor_m: 4.78, porcentaje_capacidad: null, altura_rebose_m: 5 }, expected: null },
   { label: 'Miramar API value is trusted', tank: { nombre: 'Miramar', display_name: 'Miramar', tag: 'NIVEL_MIRAMAR', valor_m: 4.78, porcentaje_capacidad: 0 }, expected: 0 },
+  { label: 'DistrictFlow preserves valid API percentage when freshData.valor_m updates', tank: { valor_m: 4.78, porcentaje_capacidad: 42 }, expected: 42 },
+  { label: 'DistrictFlow preserves zero percentage when freshData.valor_m updates', tank: { valor_m: 4.78, porcentaje_capacidad: 0 }, expected: 0 },
+  { label: 'Catalog calibrated height must not override explicit IBAL percentage', tank: { nombre: 'Alsacia', display_name: 'Alsacia', tag: 'NIVEL_ALSACIA', valor_m: 0.9342, porcentaje_capacidad: 37.37, altura_rebose: 2.5, altura_rebose_calibrada: 2.5 }, expected: 37.37 },
 ];
+
+const resolveNodePercentage = (currentNd = {}, freshData = {}) => {
+  const validNumber = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const resolveValue = (...values) => {
+    for (const value of values) {
+      const parsed = validNumber(value);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  };
+
+  return resolveValue(
+    freshData.porcentaje_capacidad,
+    freshData.porcentaje_capacidad_api,
+    freshData.porcentaje_api,
+    freshData.porcentaje,
+    currentNd.porcentaje_capacidad,
+    currentNd.porcentaje_capacidad_api,
+    currentNd.porcentaje_api,
+    currentNd.porcentaje,
+  );
+};
 
 let failed = false;
 for (const c of cases) {
@@ -66,9 +96,37 @@ for (const c of cases) {
 }
 
 for (const c of apiContractChecks) {
-  const p = calculateDisplayPorcentaje(c.tank);
+  const p = c.label === 'Catalog calibrated height must not override explicit IBAL percentage'
+    ? mergeApiTanquesWithCatalog([c.tank], [{ id: 'alsacia', aliases: ['alsacia'], nombre: 'Alsacia', altura_rebose_calibrada: 2.5 }])[0].porcentaje_capacidad
+    : calculateDisplayPorcentaje(c.tank);
+
   if (p !== c.expected) {
     console.error(`API contract mismatch for ${c.label}: expected ${c.expected}, got ${p}`);
+    failed = true;
+  } else {
+    console.log(`OK ${c.label}: ${p}`);
+  }
+}
+
+const districtFlowRegressionCheck = [
+  {
+    label: 'DistrictFlow does not recalc valid percentage from valor_m',
+    currentNd: { porcentaje: 42, valor_m: 4.78 },
+    freshData: { valor_m: 5.1, porcentaje_capacidad: 42, altura_rebose: 2.5 },
+    expected: 42,
+  },
+  {
+    label: 'DistrictFlow preserves zero percentage from API',
+    currentNd: { porcentaje: 0, valor_m: 4.78 },
+    freshData: { valor_m: 5.1, porcentaje_capacidad: 0, altura_rebose: 2.5 },
+    expected: 0,
+  },
+];
+
+for (const c of districtFlowRegressionCheck) {
+  const p = resolveNodePercentage(c.currentNd, c.freshData);
+  if (p !== c.expected) {
+    console.error(`DistrictFlow regression mismatch for ${c.label}: expected ${c.expected}, got ${p}`);
     failed = true;
   } else {
     console.log(`OK ${c.label}: ${p}`);

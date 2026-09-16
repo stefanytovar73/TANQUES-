@@ -207,7 +207,7 @@ function getMetricConfigForNodeId(nodeId) {
 
   const legacyTag = MACKENFLOC_SHAPE_TAGS[key];
   if (legacyTag) {
-    return { service: 'ptap', tag: legacyTag, defaultUnit: 'L/s' };
+    return { service: 'ptap', tag: legacyTag, defaultUnit: 'm³' };
   }
 
   return null;
@@ -921,7 +921,8 @@ function FlowShapeNode(props) {
   const { nodeData, onSelect, onDuplicate, onConnectNode, onDeleteSelected, onRename, editMode, mode, deleteMode } = data || {};
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(nodeData?.label || 'Texto / Forma');
-  const [metricLabel, setMetricLabel] = useState(null);
+  const metricNodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
+  const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId));
   const customColor = nodeData?.customColor || nodeData?.color || '#3b82f6';
   const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(customColor) ? customColor : '#3b82f6';
   const baseSize = getAutoShapeSize(draft, nodeData?.width, nodeData?.height);
@@ -934,7 +935,27 @@ function FlowShapeNode(props) {
   }, [nodeData?.label, nodeData?.customName]);
 
 
-  // No dynamic metrics for shape nodes to preserve original layout.
+  useEffect(() => {
+    let mounted = true;
+
+    const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId);
+    if (cachedLabel != null) setMetricLabel(cachedLabel);
+
+    (async () => {
+      try {
+        if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId)) {
+          if (mounted) setMetricLabel(null);
+          return;
+        }
+        const label = await loadFlowMetricForNodeId(metricNodeId);
+        if (mounted) setMetricLabel(label);
+      } catch (error) {
+        // Mantener el último valor visible si falla un refresco puntual.
+      }
+    })();
+
+    return () => { mounted = false; };
+  }, [metricNodeId]);
 
   useEffect(() => {
     if (data && data.openEditor) {
@@ -1039,8 +1060,9 @@ function FlowShapeNode(props) {
           {renderShape()}
           {!isEditing && shapeType !== 'line' ? (
             <foreignObject x={0} y={0} width={width} height={height} style={{ overflow: 'visible' }}>
-              <div xmlns="http://www.w3.org/1999/xhtml" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', wordBreak: 'break-word', color: '#0b2447', fontSize: 13, fontWeight: 700, padding: '4px 8px', boxSizing: 'border-box', pointerEvents: 'none', width: '100%', height: '100%' }}>
-                {draft}
+              <div xmlns="http://www.w3.org/1999/xhtml" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', wordBreak: 'break-word', color: '#0b2447', fontSize: 13, fontWeight: 700, padding: '4px 8px', boxSizing: 'border-box', pointerEvents: 'none', width: '100%', height: '100%', lineHeight: 1.1 }}>
+                <div>{draft}</div>
+                {metricLabel ? <div style={{ marginTop: 3, fontSize: 10, fontWeight: 900, color: '#334155', whiteSpace: 'nowrap' }}>{metricLabel}</div> : null}
               </div>
             </foreignObject>
           ) : null}
@@ -1701,6 +1723,28 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
   const edgesRef = useRef([]);
   const draftPositionsRef = useRef(new Map());
   const activeDragNodeIdRef = useRef(null);
+
+  // Una única fuente de verdad para el arrastre. En modo Mover ningún
+  // lockedPosition/draggable antiguo puede dejar un elemento "tieso".
+  useEffect(() => {
+    const shouldDrag = diagramMode === 'edit';
+    setNodes((current) => {
+      let changed = false;
+      const updated = (current || []).map((n) => {
+        const source = n.data?.nodeData || n.data || {};
+        if (n.draggable === shouldDrag && Boolean(source.lockedPosition) === !shouldDrag) return n;
+        changed = true;
+        const nodeData = { ...source, lockedPosition: !shouldDrag };
+        return {
+          ...n,
+          draggable: shouldDrag,
+          data: { ...(n.data || {}), lockedPosition: !shouldDrag, nodeData },
+        };
+      });
+      if (changed) nodesRef.current = updated;
+      return changed ? updated : current;
+    });
+  }, [diagramMode]);
   // Ref estable para onNodeSelect — evita recrear callbacks cuando el padre re-renderiza
   const onNodeSelectRef = useRef(onNodeSelect);
   useEffect(() => { onNodeSelectRef.current = onNodeSelect; }, [onNodeSelect]);
@@ -1718,15 +1762,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       const before = nds.map(n => ({ id: n.id, position: n.position }));
       pastRef.current.push({ nodes: Object.fromEntries(before.map(b => [b.id, b.position])), edges: edgesRef.current });
       futureRef.current = [];
-      const updated = nds.map(n => n.id === id ? ({ ...n, position: { x: (n.position.x || 0) + dx, y: (n.position.y || 0) + dy } }) : n);
-      try {
-        // Do not persist on each immediate move; mark as dirty so the parent UI
-        // can show "Cambios no guardados". Actual persistence happens on explicit save.
-        try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
-      } catch (e) {}
+      const updated = nds.map(n => n.id === id ? ({
+        ...n,
+        position: { x: (n.position.x || 0) + dx, y: (n.position.y || 0) + dy },
+        draggable: diagramModeRef.current === 'edit',
+      }) : n);
+      nodesRef.current = updated;
       return updated;
     });
-  }, [readDiagramState, writeDiagramState, getPersistedNodeEntry]);
+  }, []);
 
   const persistDistrictState = useCallback((nextNodes = nodesRef.current, nextEdges = edgesRef.current) => {
     try {
@@ -1740,16 +1784,14 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       raw.edges = Array.isArray(nextEdges) ? nextEdges : [];
       raw.hiddenNodeIds = Array.isArray(raw.hiddenNodeIds) ? raw.hiddenNodeIds : [];
       raw.deletedNodeIds = Array.isArray(raw.deletedNodeIds) ? raw.deletedNodeIds : [];
-      // Only persist to localStorage/server when autosave is enabled.
-      if (autoSaveEnabledRef.current) {
-        writeDiagramState(raw);
-        try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
-      } else {
-        // Mark as dirty (changes pending save) when autosave is disabled
-        try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
-      }
+
+      // Guardado por evento: color, figura, tamaño, rotación, conexiones y la
+      // posición final del drag se escriben inmediatamente. onNodesChange sigue
+      // evitando guardar cada pixel durante el arrastre.
+      writeDiagramState(raw);
+      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
     } catch (e) {}
-  }, [getPersistedNodeEntry, readDiagramState, writeDiagramState]);
+  }, [getPersistedNodeEntry, readDiagramState, writeDiagramState, onDirtyChanged]);
 
   const applyNodeRename = useCallback((id, label) => {
     const clean = (label || '').replace(/\s+/g, ' ').trim();
@@ -1809,6 +1851,61 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       try { const raw = readDiagramState(); writeDiagramState(raw); } catch (err) {}
   }, [persistDistrictState]);
 
+  const changeSelectedNodeFigure = useCallback((targetId = selectedNodeId) => {
+    const idToUpdate = targetId || selectedNodeIdRef.current || selectedNodeId;
+    if (!idToUpdate) return null;
+
+    const presets = [
+      { type: 'tank', shapeType: 'cylinder' },
+      { type: 'plant', shapeType: 'rect' },
+      { type: 'district', shapeType: 'rect' },
+      { type: 'shape', shapeType: 'rect' },
+      { type: 'shape', shapeType: 'circle' },
+      { type: 'shape', shapeType: 'cylinder' },
+      { type: 'shape', shapeType: 'diamond' },
+    ];
+
+    const currentNodes = Array.isArray(nodesRef.current) ? nodesRef.current : [];
+    const currentNode = currentNodes.find((n) => n.id === idToUpdate);
+    if (!currentNode) return null;
+
+    const currentData = currentNode.data?.nodeData || currentNode.data || {};
+    const currentType = currentNode.type || currentData.type || 'tank';
+    const currentShape = currentType === 'tank'
+      ? 'cylinder'
+      : (currentType === 'plant' || currentType === 'district'
+        ? 'rect'
+        : (currentData.shapeType || 'rect'));
+    const currentIndex = presets.findIndex((preset) => preset.type === currentType && preset.shapeType === currentShape);
+    const nextPreset = presets[(currentIndex >= 0 ? currentIndex + 1 : 0) % presets.length];
+
+    const updated = currentNodes.map((n) => {
+      if (n.id !== idToUpdate) return n;
+      const source = n.data?.nodeData || n.data || {};
+      const nodeData = {
+        ...source,
+        id: n.id,
+        type: nextPreset.type,
+        shapeType: nextPreset.shapeType,
+      };
+      return {
+        ...n,
+        type: nextPreset.type,
+        data: {
+          ...(n.data || {}),
+          type: nextPreset.type,
+          shapeType: nextPreset.shapeType,
+          nodeData,
+        },
+      };
+    });
+
+    nodesRef.current = updated;
+    setNodes([...updated]);
+    persistDistrictState(updated, edgesRef.current);
+    return nextPreset;
+  }, [selectedNodeId, persistDistrictState]);
+
   const changeSelectedNodeColor = useCallback((color, targetId = selectedNodeId) => {
     const idToUpdate = targetId || selectedNodeId;
     if (!idToUpdate || !color) return;
@@ -1854,10 +1951,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         if (n.id !== id) return n;
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: nextLocked };
-        return { ...n, data: { ...(n.data || {}), nodeData: newNodeData } };
+        return {
+          ...n,
+          draggable: !nextLocked && diagramModeRef.current === 'edit',
+          data: { ...(n.data || {}), lockedPosition: nextLocked, nodeData: newNodeData },
+        };
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
+      try { persistDistrictState(updated, edgesRef.current); } catch (e) {}
     } catch (e) { console.warn('[DISTRICT] toggleLockSelectedNode failed', e && e.message); }
   }, [selectedNodeId]);
 
@@ -2820,7 +2922,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       setNodes([...newNodes]);
       persistDistrictState(newNodes, edgesRef.current);
 
-      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (e) {}
+      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
       try { setOverlayVisible(true); } catch (e) {}
     } catch (e) {}
   }, [persistDistrictState, onDirtyChanged]);
@@ -3253,6 +3355,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     toggleShowFlow,
     addDiagramNode,
     addShapeNode,
+    changeSelectedNodeFigure,
     changeSelectedNodeColor,
     duplicateSelectedNode,
     deleteSelectedNode,
@@ -3292,7 +3395,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         try { persistDistrictState(nodesRef.current, updated); } catch (e2) {}
       } catch (e) { console.error('[DistrictFlow] updateEdgeType error', e && e.message); }
     },
-  }), [doAutoLayout, doSave, doRestoreInitial, doViewAll, doUndo, doRedo, toggleShowFlow, addDiagramNode, addShapeNode, changeSelectedNodeColor, duplicateSelectedNode, deleteSelectedNode, rotateSelectedNode, setSelectedNodeRotation, editUnlockAllNodes, saveAndLockAllNodes, selectedNodeId, selectedEdgeId, showFlow, deleteSelectedConnection]);
+  }), [doAutoLayout, doSave, doRestoreInitial, doViewAll, doUndo, doRedo, toggleShowFlow, addDiagramNode, addShapeNode, changeSelectedNodeFigure, changeSelectedNodeColor, duplicateSelectedNode, deleteSelectedNode, rotateSelectedNode, setSelectedNodeRotation, editUnlockAllNodes, saveAndLockAllNodes, selectedNodeId, selectedEdgeId, showFlow, deleteSelectedConnection]);
 
   // Autosave interval: guarda nodes+edges y viewport cada segundo cuando está habilitado
   useEffect(() => {

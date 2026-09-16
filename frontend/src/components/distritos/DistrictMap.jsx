@@ -582,6 +582,24 @@ export default function DistrictMap() {
             </div>
             <Button
               size="small"
+              variant="outlined"
+              color="warning"
+              disabled={!selectedId}
+              onClick={() => {
+                setDeleteMode(false);
+                const targetId = selectedId || flowRef.current?.getSelectedNodeId?.();
+                const next = flowRef.current?.changeSelectedNodeFigure?.(targetId);
+                if (next) {
+                  setSnack({ open: true, msg: 'Figura cambiada y guardada' });
+                } else {
+                  setSnack({ open: true, msg: 'Selecciona un elemento para cambiar su figura' });
+                }
+              }}
+            >
+              Cambiar figura
+            </Button>
+            <Button
+              size="small"
               variant={deleteMode ? 'contained' : 'outlined'}
               color="error"
               onClick={() => { setDeleteMode(m => !m); setEditTool('select'); }}

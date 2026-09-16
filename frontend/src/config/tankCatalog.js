@@ -380,8 +380,9 @@ const mergeTankWithCatalog = (tank, catalog) => {
     if (hasExplicitPercentage) {
         computedPorcentaje = Number(apiPorcentaje);
     } else if (catalogHasCalibratedHeight && !isBadQuality && nivelActual != null && rawAltura != null && rawAltura > 0) {
-        const alturaUsar = (config && config.altura_rebose_calibrada != null && Number.isFinite(Number(config.altura_rebose_calibrada))) ? Number(config.altura_rebose_calibrada) : rawAltura;
-        const raw = calculateDisplayPorcentaje(nivelActual, alturaUsar);
+        // rawAltura ya incorpora el fallback oficial de 6 m para los tres
+        // sensores cuyo porcentaje llega null desde la API.
+        const raw = calculateDisplayPorcentaje(nivelActual, rawAltura);
         computedPorcentaje = (raw == null) ? null : Math.round(raw);
     } else if (!isBadQuality && nivelActual != null && rawAltura != null && rawAltura > 0) {
         const raw = calculateDisplayPorcentaje(nivelActual, rawAltura);

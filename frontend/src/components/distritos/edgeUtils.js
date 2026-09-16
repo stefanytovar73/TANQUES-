@@ -68,7 +68,7 @@ export function normalizeSavedEdge(edge, defaults = {}) {
     normalized.style = { ...normalized.style, strokeLinecap: 'round' };
   }
   // Usar el tipo guardado en el edge si existe y es válido, luego el default, y como fallback 'straight'
-  const validEdgeTypes = new Set(['straight', 'default', 'smoothstep', 'step']);
+  const validEdgeTypes = new Set(['smart', 'straight', 'default', 'smoothstep', 'step']);
   if (normalized.type && validEdgeTypes.has(normalized.type)) {
     // mantener el tipo guardado
   } else if (defaults.type && validEdgeTypes.has(defaults.type)) {

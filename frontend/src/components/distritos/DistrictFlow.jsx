@@ -670,9 +670,30 @@ function getAutoShapeSize(label = '', currentWidth = 120, currentHeight = 68) {
 }
 
 const FLOW_METRIC_CONFIG = {
-  'ptap-chembe': { service: 'ptap', tag: 'PTAP_CAUDAL_CHEMBE_ENTRADA', defaultUnit: 'L/s' },
-  'ptap-pola-1': { service: 'ptap', tag: 'PTAP_CAUDAL_ENTRADA_24', defaultUnit: 'L/s' },
-  'ptap-pola-2': { service: 'ptap', tag: 'PTAP_CAUDAL_ENTRADA_27', defaultUnit: 'L/s' },
+  // CAY: historically arrived as PTAP_CAUDAL_CAY_16; newer API payloads can
+  // expose the same point as Chembe Entrada. Accept both without changing the node.
+  'ptap-chembe': {
+    service: 'ptap',
+    tags: ['PTAP_CAUDAL_CAY_16', 'PTAP_CAUDAL_CHEMBE_ENTRADA'],
+    keywords: [['CAY'], ['CHEMBE', 'ENTRADA']],
+    defaultUnit: 'L/s',
+  },
+  'ptap-pola-1': { service: 'ptap', tags: ['PTAP_CAUDAL_ENTRADA_24'], defaultUnit: 'L/s' },
+  'ptap-pola-2': { service: 'ptap', tags: ['PTAP_CAUDAL_ENTRADA_27'], defaultUnit: 'L/s' },
+
+  // Formas operativas que deben conservar su cuadrito de valor.
+  'forma-1788988205128-xhpu4': {
+    service: 'any',
+    tags: ['PTAP_CAUDAL_COCORA', 'CAPTACION_CAUDAL_COCORA', 'CAPTACION_COCORA'],
+    keywords: [['COCORA']],
+    defaultUnit: 'L/s',
+  },
+  'forma-1788988225880-frv4k': {
+    service: 'ptap',
+    tags: ['PTAP_CAUDAL_BOMBEO_AURORA', 'PTAP_CAUDAL_BOMBEO'],
+    keywords: [['BOMBEO', 'AURORA'], ['BOMBEO']],
+    defaultUnit: 'L/s',
+  },
 };
 
 function getMetricConfigForNodeId(nodeId, nodeData = {}) {
@@ -684,12 +705,12 @@ function getMetricConfigForNodeId(nodeId, nodeData = {}) {
 
   const mackenTag = MACKENFLOC_SHAPE_TAGS[key];
   if (mackenTag) {
-    return { service: 'ptap', tag: mackenTag, defaultUnit: 'm³' };
+    return { service: 'ptap', tags: [mackenTag], defaultUnit: 'm³' };
   }
 
   const operationalTag = OPERATIONAL_SHAPE_TAGS[key];
   if (operationalTag) {
-    return { service: 'ptap', tag: operationalTag, defaultUnit: 'L/s' };
+    return { service: 'ptap', tags: [operationalTag], defaultUnit: 'L/s' };
   }
 
   const labels = [
@@ -707,16 +728,54 @@ function getMetricConfigForNodeId(nodeId, nodeData = {}) {
 
     const mackenByLabel = MACKENFLOC_LABEL_TAGS[normalized];
     if (mackenByLabel) {
-      return { service: 'ptap', tag: mackenByLabel, defaultUnit: 'm³' };
+      return { service: 'ptap', tags: [mackenByLabel], defaultUnit: 'm³' };
     }
 
     const operationalByLabel = OPERATIONAL_LABEL_TAGS[normalized];
     if (operationalByLabel) {
-      return { service: 'ptap', tag: operationalByLabel, defaultUnit: 'L/s' };
+      return { service: 'ptap', tags: [operationalByLabel], defaultUnit: 'L/s' };
     }
   }
 
   return null;
+}
+
+function findFlowMetricVariable(response, config = {}) {
+  const variables = Array.isArray(response?.variables) ? response.variables : [];
+  if (!variables.length) return null;
+
+  const candidateTags = [
+    ...(Array.isArray(config.tags) ? config.tags : []),
+    ...(config.tag ? [config.tag] : []),
+  ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+
+  if (candidateTags.length) {
+    const exact = variables.find((item) =>
+      item && candidateTags.includes(String(item.tag || '').trim().toUpperCase())
+    );
+    if (exact) return exact;
+  }
+
+  const keywordSets = Array.isArray(config.keywords) ? config.keywords : [];
+  if (!keywordSets.length) return null;
+
+  return variables.find((item) => {
+    if (!item) return false;
+    const haystack = normalizeMetricLabelKey([
+      item.tag,
+      item.nombre,
+      item.name,
+      item.label,
+      item.descripcion,
+      item.description,
+    ].filter(Boolean).join(' '));
+
+    return keywordSets.some((keywords) =>
+      Array.isArray(keywords) &&
+      keywords.length &&
+      keywords.every((keyword) => haystack.includes(normalizeMetricLabelKey(keyword)))
+    );
+  }) || null;
 }
 
 function formatFlowMetricVariable(variable, fallbackUnit = 'L/s') {
@@ -742,13 +801,15 @@ async function loadFlowMetricForNodeId(nodeId, nodeData = {}) {
   if (!config) return null;
 
   try {
-    const response = config.service === 'ptap'
-      ? await tanqueService.getPtap()
-      : await tanqueService.getCaptacion();
+    const responses = config.service === 'any'
+      ? await Promise.all([tanqueService.getPtap(), tanqueService.getCaptacion()])
+      : [config.service === 'ptap' ? await tanqueService.getPtap() : await tanqueService.getCaptacion()];
 
-    const variables = (response && response.variables) || [];
-    const variable = variables.find((item) => item && item.tag === config.tag);
-    return variable ? formatFlowMetricVariable(variable, config.defaultUnit) : null;
+    for (const response of responses) {
+      const variable = findFlowMetricVariable(response, config);
+      if (variable) return formatFlowMetricVariable(variable, config.defaultUnit);
+    }
+    return null;
   } catch (error) {
     return null;
   }
@@ -759,12 +820,15 @@ function getCachedFlowMetricForNodeId(nodeId, nodeData = {}) {
   if (!config) return null;
 
   try {
-    const response = config.service === 'ptap'
-      ? tanqueService.peekPtap?.()
-      : tanqueService.peekCaptacion?.();
-    const variables = (response && response.variables) || [];
-    const variable = variables.find((item) => item && item.tag === config.tag);
-    return variable ? formatFlowMetricVariable(variable, config.defaultUnit) : null;
+    const responses = config.service === 'any'
+      ? [tanqueService.peekPtap?.(), tanqueService.peekCaptacion?.()]
+      : [config.service === 'ptap' ? tanqueService.peekPtap?.() : tanqueService.peekCaptacion?.()];
+
+    for (const response of responses) {
+      const variable = findFlowMetricVariable(response, config);
+      if (variable) return formatFlowMetricVariable(variable, config.defaultUnit);
+    }
+    return null;
   } catch (error) {
     return null;
   }
@@ -3473,10 +3537,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       const nextLabel = clean;
       const sourceData = (n.data && n.data.nodeData) || (n.data || {});
       const originalName = sourceData.apiName || sourceData.originalName || sourceData.tag || sourceData.display_name || sourceData.nombre || sourceData.label || n.label || n.id;
-      const currentWidth = Number.isFinite(Number(sourceData.width)) ? Number(sourceData.width) : null;
-      const currentHeight = Number.isFinite(Number(sourceData.height)) ? Number(sourceData.height) : null;
-      const shouldAutoFitShape = n.type === 'shape' && (currentWidth == null || Math.abs(currentWidth - 120) < 0.5 || currentHeight == null || Math.abs(currentHeight - 68) < 0.5);
-      const autoShapeSize = n.type === 'shape' && shouldAutoFitShape ? getAutoShapeSize(nextLabel, null, null) : null;
       const nextNodeData = {
         ...sourceData,
         id: n.id,
@@ -3488,8 +3548,11 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         nombre: nextLabel,
         originalName,
         apiName: sourceData.apiName || sourceData.originalName || sourceData.tag || sourceData.display_name || sourceData.nombre || originalName,
-        width: autoShapeSize ? autoShapeSize.width : sourceData.width,
-        height: autoShapeSize ? autoShapeSize.height : sourceData.height,
+        // Renombrar no puede tocar geometría ni figura.
+        width: sourceData.width,
+        height: sourceData.height,
+        rotation: sourceData.rotation,
+        shapeType: sourceData.shapeType,
       };
 
       return {
@@ -3509,8 +3572,10 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           nombre: nextLabel,
           originalName,
           apiName: sourceData.apiName || sourceData.originalName || sourceData.tag || sourceData.display_name || sourceData.nombre || originalName,
-          width: autoShapeSize ? autoShapeSize.width : sourceData.width,
-          height: autoShapeSize ? autoShapeSize.height : sourceData.height,
+          width: sourceData.width,
+          height: sourceData.height,
+          rotation: sourceData.rotation,
+          shapeType: sourceData.shapeType,
           nodeData: nextNodeData,
         },
       };
@@ -5797,21 +5862,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
             else onNodeSelect(null, null, { openDetails: false });
           }
         }}
-        onNodeDoubleClick={(event, node) => {
-          try { event.preventDefault(); event.stopPropagation(); } catch (e) {}
-          const shouldSuppress = dragMovedRef.current || suppressClickAfterDragRef.current || suppressSelectionAfterDragRef.current || Date.now() < dragSuppressUntilRef.current;
-          if (shouldSuppress) {
-            dragMovedRef.current = false;
-            suppressClickAfterDragRef.current = false;
-            suppressSelectionAfterDragRef.current = false;
-            return;
-          }
-          try {
-            const nextId = node?.id || null;
-            setSelectedNodeId(nextId);
-            if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: true });
-          } catch (e) {}
-        }}
         onEdgeClick={(event, edge) => {
           try { event?.stopPropagation?.(); } catch (e) {}
           _setSelectedNodeId(null);
@@ -5857,6 +5907,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         connectionLineStyle={{ stroke: '#000', strokeWidth: 5 }}
         panOnScroll={false}
         zoomOnScroll={true}
+        zoomOnDoubleClick={false}
         panOnDrag
         snapToGrid={false}
         nodesDraggable={diagramMode === 'edit'}

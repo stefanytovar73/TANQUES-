@@ -847,6 +847,23 @@ function enrichTankNodeMetrics(data = {}) {
   };
 }
 
+function mergeTelemetryPreservingVisual(current = {}, telemetry = {}, nodeType = null) {
+  const currentData = current && typeof current === 'object' ? current : {};
+  const telemetryData = telemetry && typeof telemetry === 'object' ? telemetry : {};
+  const merged = { ...currentData, ...telemetryData };
+
+  const visualKeys = ['type', 'shapeType', 'width', 'height', 'rotation', 'customColor', 'color', 'lockedPosition'];
+  for (const key of visualKeys) {
+    if (currentData[key] !== undefined && currentData[key] !== null && currentData[key] !== '') {
+      merged[key] = currentData[key];
+    }
+  }
+  if (nodeType && (!merged.type || merged.type === 'tank')) {
+    merged.type = currentData.type || nodeType;
+  }
+  return merged;
+}
+
 function getCachedTankTelemetryForNode(nodeId, nodeData = {}) {
   try {
     const response = tanqueService.peekTanques?.();
@@ -1743,21 +1760,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, init
       if (!document.getElementById('district-force-visible')) {
         const s = document.createElement('style');
         s.id = 'district-force-visible';
-        s.innerHTML = '.react-flow__node{visibility: visible !important; opacity: 1 !important;} .react-flow__node *{visibility: visible !important;} .react-flow__edges,.react-flow__edges *{pointer-events: none !important; mask: url(#rf-nodes-occlusion-mask); -webkit-mask: url(#rf-nodes-occlusion-mask);}';
+        s.innerHTML = '.react-flow__node{visibility: visible !important; opacity: 1 !important;} .react-flow__node *{visibility: visible !important;}';
         document.head.appendChild(s);
       }
     } catch (e) {}
   }, []);
-
-  // Ensure the edges container references the dynamically generated mask.
-  useEffect(() => {
-    try {
-      const edgesGroup = document.querySelector('.react-flow__edges');
-      if (edgesGroup && !edgesGroup.getAttribute('mask')) {
-        try { edgesGroup.setAttribute('mask', 'url(#rf-nodes-occlusion-mask)'); } catch (e) {}
-      }
-    } catch (e) {}
-  }, [nodes]);
 
 // Render an SVG <mask> that hides edge strokes only under the visible node body.
 // White badges and labels are intentionally excluded so they remain readable and
@@ -2384,7 +2391,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
               // Merge API tank with local catalog (calibrated heights) to compute porcentaje consistently
               const mergedApi = (mergeApiTanquesWithCatalog([found || {}], catalogForQuick) || [found])[0] || found;
               const enriched = enrichTankNodeMetrics(mergedApi || {});
-              const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
+              const mergedNodeData = { ...mergeTelemetryPreservingVisual(nd, enriched, n.type), customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
 
               // IMPORTANT: do not spread mergedNodeData into the top-level `data` object.
               // Spreading it here previously overwrote visual/design properties (width, height,
@@ -2492,7 +2499,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
                   const preservedCustom = nameLocked ? (nd.customName || n.customName || '') : (nd.customName || found.display_name || '');
                   const mergedApi = (mergeApiTanquesWithCatalog([found || {}], catalogForFull) || [found])[0] || found;
                   const enriched = enrichTankNodeMetrics(mergedApi || {});
-                  const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
+                  const mergedNodeData = { ...mergeTelemetryPreservingVisual(nd, enriched, n.type), customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
                   return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData } };
                 } catch (e) { return n; }
               });
@@ -2769,6 +2776,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
   // Transient drag/edit state must not feed the saved history stack.
   const savedPastRef = useRef([]);
   const savedFutureRef = useRef([]);
+  const undoBusyRef = useRef(false);
   const clearTransientHistory = useCallback(() => {
     pastRef.current = [];
     futureRef.current = [];
@@ -3293,11 +3301,20 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
   const updateSelectedConnectionStyle = useCallback((edgeId = selectedEdgeId, nextStyle = {}) => {
     if (!edgeId) return;
-    const updated = (edgesRef.current || []).map((e) => e.id === edgeId ? ({ ...e, style: { ...(e.style || {}), ...(nextStyle || {}) } }) : e);
+    const updated = (edgesRef.current || []).map((e) => {
+      if (e.id !== edgeId) return e;
+      const style = { ...(e.style || {}), ...(nextStyle || {}) };
+      const stroke = style.stroke || e.markerEnd?.color || '#000';
+      return {
+        ...e,
+        style,
+        markerEnd: { ...(e.markerEnd || {}), type: MarkerType.ArrowClosed, color: stroke, width: e.markerEnd?.width || 10, height: e.markerEnd?.height || 10 },
+      };
+    });
     setEdges(updated);
     edgesRef.current = updated;
-    try { const opId = `edge-style:${Date.now()}-${Math.random().toString(36).slice(2,7)}`; console.debug('[DIAG] updateSelectedConnectionStyle', opId, 'edge=', edgeId, 'style=', nextStyle); persistDistrictState(nodesRef.current, updated, { _diagOpId: opId }); } catch (e) {}
-  }, [selectedEdgeId, readDiagramState, writeDiagramState]);
+    try { const opId = `edge-style:${Date.now()}-${Math.random().toString(36).slice(2,7)}`; persistDistrictState(nodesRef.current, updated, { _diagOpId: opId }); } catch (e) {}
+  }, [selectedEdgeId, persistDistrictState]);
 
   const updateSelectedEdgeLabel = useCallback((edgeId = selectedEdgeId, newLabel = '') => {
     if (!edgeId) return;
@@ -3600,7 +3617,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
               const mergedApi = (mergeApiTanquesWithCatalog([found || {}], catalog) || [found])[0] || found;
               const enriched = enrichTankNodeMetrics(mergedApi || {});
 
-              const mergedRemoteEntry = preserveLiveMetricValues(nd, enriched);
+              const mergedRemoteEntry = mergeTelemetryPreservingVisual(nd, enriched, n.type);
               const mergedVisual = preserveLiveMetricValues(n.data || {}, mergedRemoteEntry);
               const visualData = stripRuntimeTelemetry({ ...(n.data || {}), ...mergedVisual });
 
@@ -4029,24 +4046,24 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
   }, [persistConnection]);
 
   const doUndo = useCallback(async () => {
-    if (savedPastRef.current.length < 2) return false;
-    const currentDesign = buildDesignHistorySnapshot({ nodes: Object.fromEntries((nodesRef.current || []).map((n) => [n.id, getPersistedNodeEntry(n, (readDiagramState().nodes || {})[n.id] || {})])), edges: edgesRef.current || [] });
+    if (undoBusyRef.current || savedPastRef.current.length < 2) return false;
+    undoBusyRef.current = true;
+
+    const previousRuntimeNodes = nodesRef.current || [];
+    const previousRuntimeEdges = edgesRef.current || [];
+    const previousPast = savedPastRef.current.slice();
+    const previousFuture = savedFutureRef.current.slice();
+
     const savedPrevious = savedPastRef.current[savedPastRef.current.length - 2];
     const currentSaved = savedPastRef.current[savedPastRef.current.length - 1];
+    const now = new Date().toISOString();
     const payload = {
       ...buildDesignHistorySnapshot({ nodes: Object.fromEntries(Object.entries(savedPrevious.nodes || {})), edges: savedPrevious.edges || [] }),
-      updated_at: new Date().toISOString(),
-      _updatedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      updated_at: now,
+      _updatedAt: now,
+      updatedAt: now,
     };
-    const ok = await diagramService.saveState(payload);
-    if (!ok) {
-      console.warn('[DIAGRAM] Undo rejected by server; history preserved');
-      return false;
-    }
-    savedPastRef.current = savedPastRef.current.slice(0, -1);
-    savedFutureRef.current.push(currentSaved);
-    writeDiagramState(payload, { source: 'remote' });
+
     const targetNodes = Object.values(payload.nodes || {}).map((entry) => ({
       id: entry.id,
       type: entry.type || 'tank',
@@ -4055,12 +4072,35 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       label: entry.label || entry.id || 'Sin nombre',
       data: { ...(entry || {}), customName: entry.customName || '', label: entry.label || entry.id || 'Sin nombre', nodeData: { ...(entry || {}) } },
     }));
+
+    // Feedback inmediato: el usuario ve el deshacer antes de esperar la red.
+    savedPastRef.current = savedPastRef.current.slice(0, -1);
+    savedFutureRef.current.push(currentSaved);
     nodesRef.current = targetNodes;
     edgesRef.current = payload.edges || [];
     setNodes(targetNodes);
     setEdges(payload.edges || []);
-    return true;
-  }, [getPersistedNodeEntry, readDiagramState, writeDiagramState]);
+    writeDiagramState(payload, { source: 'local', sendToServer: false });
+
+    try {
+      const ok = await diagramService.saveState(payload);
+      if (!ok) throw new Error('Undo rejected by server');
+      writeDiagramState(payload, { source: 'remote', sendToServer: false });
+      return true;
+    } catch (e) {
+      // Si el servidor falla, restaurar exactamente lo que había antes.
+      savedPastRef.current = previousPast;
+      savedFutureRef.current = previousFuture;
+      nodesRef.current = previousRuntimeNodes;
+      edgesRef.current = previousRuntimeEdges;
+      setNodes(previousRuntimeNodes);
+      setEdges(previousRuntimeEdges);
+      console.warn('[DIAGRAM] Undo rejected by server; state restored');
+      return false;
+    } finally {
+      undoBusyRef.current = false;
+    }
+  }, [writeDiagramState]);
 
   const doRedo = useCallback(async () => {
     if (savedFutureRef.current.length === 0) return false;
@@ -4662,7 +4702,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
             const preservedCustom = nameLocked ? (nd.customName || n.customName || '') : (nd.customName || found.display_name || '');
 
             const enriched = enrichTankNodeMetrics(found || {});
-            const mergedNodeData = { ...nd, ...enriched, customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
+            const mergedNodeData = { ...mergeTelemetryPreservingVisual(nd, enriched, n.type), customName: preservedCustom || nd.customName, display_name: preservedCustom || enriched.display_name || nd.display_name };
 
             return { ...n, data: { ...(n.data || {}), nodeData: mergedNodeData } };
           } catch (e) { return n; }
@@ -4735,8 +4775,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           : null;
 
         const merged = {
-          ...currentNd,
-          ...freshData,
+          ...mergeTelemetryPreservingVisual(currentNd, freshData, n.type),
           // IMPORTANTE: preservar la posición actual del nodo, nunca sobreescribir con la de la API
           position: n.position,
           nameLocked: Boolean((currentNd && currentNd.nameLocked) || n.nameLocked || false),
@@ -4860,20 +4899,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
   // keep refs in sync to allow stable callbacks
   useEffect(() => { nodesRef.current = nodes; edgesRef.current = edges; }, [nodes, edges]);
-
-  // Resaltar edge seleccionada en rojo para dar feedback visual antes de eliminarla
-  useEffect(() => {
-    setEdges((eds) => eds.map(e => ({
-      ...e,
-      style: e.id === selectedEdgeId
-        ? { stroke: '#ef4444', strokeWidth: 4.5, strokeLinecap: 'round' }
-        : { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round' },
-      markerEnd: e.id === selectedEdgeId
-        ? { type: MarkerType.ArrowClosed, color: '#ef4444', width: 10, height: 10 }
-        : { type: MarkerType.ArrowClosed, color: '#000', width: 10, height: 10 },
-    })));
-  }, [selectedEdgeId]);
-
 
   // Solo hacer fitView la PRIMERA vez que se cargan los nodos.
   // Después, restaurar el viewport guardado para que la pantalla no se mueva.
@@ -5231,7 +5256,6 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         connectOnClick={editMode && (diagramMode === 'edit' || editMode)}
         connectionMode="loose"
       >
-          <EdgesOcclusionMask nodes={nodes} />
         <Background gap={16} />
       </ReactFlow>
 

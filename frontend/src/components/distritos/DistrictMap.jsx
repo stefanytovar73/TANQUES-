@@ -16,7 +16,6 @@ import DoneIcon from '@mui/icons-material/Done';
 import LinkIcon from '@mui/icons-material/Link';
 import PanToolIcon from '@mui/icons-material/PanTool';
 import SaveIcon from '@mui/icons-material/Save';
-import RestoreIcon from '@mui/icons-material/Restore';
 import UndoIcon from '@mui/icons-material/Undo';
 import PaletteIcon from '@mui/icons-material/Palette';
 import LockIcon from '@mui/icons-material/Lock';
@@ -844,7 +843,6 @@ export default function DistrictMap() {
               </Button>
             </Tooltip>
 
-            <Button size="small" startIcon={<RestoreIcon />} onClick={() => { flowRef.current?.doRestoreInitial(); }}>Restaurar</Button>
             <Button size="small" startIcon={<UndoIcon />} onClick={() => { flowRef.current?.doUndo(); }}>Deshacer</Button>
           </Box>
         ) : null}

@@ -5,6 +5,7 @@ use App\Http\Controllers\TanquesController;
 use App\Http\Controllers\DiagramController;
 
 Route::get('/tanques', [TanquesController::class, 'index']);
+Route::get('/distritos/bootstrap', [TanquesController::class, 'bootstrapDistritos']);
 Route::post('/tanques', [TanquesController::class, 'store']);
 Route::put('/tanques/{id}', [TanquesController::class, 'update']);
 Route::delete('/tanques/{id}', [TanquesController::class, 'destroy']);

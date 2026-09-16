@@ -82,6 +82,10 @@ const OPERATIONAL_LABEL_TAGS = {
   'PARSHALL': 'PTAP_CAUDAL_PARSHALL',
   'CREAGUER': 'PTAP_CAUDAL_CREAGER',
   'CREAGER': 'PTAP_CAUDAL_CREAGER',
+  'COMBEIMA 1': 'PTAP_CAUDAL_ENTRADA_24',
+  'COMBEIMA 2': 'PTAP_CAUDAL_ENTRADA_27',
+  'CHEMBE': 'PTAP_CAUDAL_CHEMBE_ENTRADA',
+  'RETROLAVADO': 'PTAP_CAUDAL_VALVULA_VRP',
 };
 
 const MACKENFLOC_ID_TO_LABEL = {
@@ -671,7 +675,7 @@ const FLOW_METRIC_CONFIG = {
   'ptap-pola-2': { service: 'ptap', tag: 'PTAP_CAUDAL_ENTRADA_27', defaultUnit: 'L/s' },
 };
 
-function getMetricConfigForNodeId(nodeId) {
+function getMetricConfigForNodeId(nodeId, nodeData = {}) {
   const key = String(nodeId || '').trim();
   if (!key) return null;
 
@@ -686,6 +690,30 @@ function getMetricConfigForNodeId(nodeId) {
   const operationalTag = OPERATIONAL_SHAPE_TAGS[key];
   if (operationalTag) {
     return { service: 'ptap', tag: operationalTag, defaultUnit: 'L/s' };
+  }
+
+  const labels = [
+    STABLE_SHAPE_NAME_BY_ID[key],
+    nodeData?.customName,
+    nodeData?.label,
+    nodeData?.display_name,
+    nodeData?.nombre,
+    nodeData?.name,
+  ].filter(Boolean);
+
+  for (const label of labels) {
+    const normalized = normalizeMetricLabelKey(label);
+    if (!normalized) continue;
+
+    const mackenByLabel = MACKENFLOC_LABEL_TAGS[normalized];
+    if (mackenByLabel) {
+      return { service: 'ptap', tag: mackenByLabel, defaultUnit: 'm³' };
+    }
+
+    const operationalByLabel = OPERATIONAL_LABEL_TAGS[normalized];
+    if (operationalByLabel) {
+      return { service: 'ptap', tag: operationalByLabel, defaultUnit: 'L/s' };
+    }
   }
 
   return null;
@@ -709,8 +737,8 @@ function formatFlowMetricVariable(variable, fallbackUnit = 'L/s') {
   return `${valueText} ${unit}`.trim();
 }
 
-async function loadFlowMetricForNodeId(nodeId) {
-  const config = getMetricConfigForNodeId(nodeId);
+async function loadFlowMetricForNodeId(nodeId, nodeData = {}) {
+  const config = getMetricConfigForNodeId(nodeId, nodeData);
   if (!config) return null;
 
   try {
@@ -726,8 +754,8 @@ async function loadFlowMetricForNodeId(nodeId) {
   }
 }
 
-function getCachedFlowMetricForNodeId(nodeId) {
-  const config = getMetricConfigForNodeId(nodeId);
+function getCachedFlowMetricForNodeId(nodeId, nodeData = {}) {
+  const config = getMetricConfigForNodeId(nodeId, nodeData);
   if (!config) return null;
 
   try {
@@ -1332,7 +1360,7 @@ function SmartDistrictEdge(props) {
     ...(selected ? { filter: 'drop-shadow(0 0 2px rgba(37,99,235,0.55))' } : {}),
   };
 
-  return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={visibleStyle} interactionWidth={24} />;
+  return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={visibleStyle} interactionWidth={48} />;
 }
 
 const EDGE_TYPES = { smart: SmartDistrictEdge };
@@ -1553,7 +1581,7 @@ function FlowPlantNode(props) {
   const isPending = Boolean(data && data.pendingConnect);
   const labelText = getNodeDisplayName({ data: nodeData });
   const metricNodeId = nodeData?.id ?? nodeData?.nodeId ?? data?.id ?? data?.nodeId;
-  const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId));
+  const [metricLabel, setMetricLabel] = useState(() => getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {}));
   const beginEdit = (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -1565,17 +1593,17 @@ function FlowPlantNode(props) {
   useEffect(() => {
     let mounted = true;
 
-    const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId);
+    const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {});
     if (cachedLabel != null) setMetricLabel(cachedLabel);
 
     (async () => {
       try {
-        if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId)) {
+        if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId, nodeData || data || {})) {
           if (mounted) setMetricLabel(null);
           return;
         }
 
-        const label = await loadFlowMetricForNodeId(metricNodeId);
+        const label = await loadFlowMetricForNodeId(metricNodeId, nodeData || data || {});
         if (mounted && label != null) setMetricLabel(label);
       } catch (error) {
         // Conservar el último dato visible si el refresco falla.
@@ -1906,7 +1934,7 @@ function FlowShapeNode(props) {
     setDraft(runtimeDisplayName);
   }, [runtimeDisplayName]);
 
-  const cachedMetricText = getCachedFlowMetricForNodeId(runtimeNodeData?.id ?? data?.id);
+  const cachedMetricText = getCachedFlowMetricForNodeId(runtimeNodeData?.id ?? data?.id, runtimeNodeData || data || {});
   const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '')
     ? String(runtimeNodeData.ptapMetricText)
     : cachedMetricText;
@@ -2083,7 +2111,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes, init
       if (!document.getElementById('district-force-visible')) {
         const s = document.createElement('style');
         s.id = 'district-force-visible';
-        s.innerHTML = '.react-flow__node{visibility: visible !important; opacity: 1 !important;} .react-flow__node *{visibility: visible !important;}';
+        s.innerHTML = '.react-flow__node{visibility: visible !important; opacity: 1 !important;} .react-flow__node *{visibility: visible !important;} .react-flow__edge-interaction{stroke-width:48px !important; pointer-events:stroke !important;}';
         document.head.appendChild(s);
       }
     } catch (e) {}
@@ -5304,12 +5332,23 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
   useEffect(() => {
     const handler = (e) => {
+      const target = e.target;
+      const tagName = String(target?.tagName || '').toLowerCase();
+      const isTyping = tagName === 'input' || tagName === 'textarea' || target?.isContentEditable;
+
+      if (!isTyping && (e.key === 'Delete' || e.key === 'Backspace') && selectedEdgeId) {
+        e.preventDefault();
+        deleteSelectedConnection(selectedEdgeId);
+        if (onEdgeSelect) onEdgeSelect(null, null);
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); doUndo(); }
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) { e.preventDefault(); doRedo(); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [doUndo, doRedo]);
+  }, [doUndo, doRedo, selectedEdgeId, deleteSelectedConnection, onEdgeSelect]);
 
   // expose imperative methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -5567,6 +5606,14 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         onEdgeClick={(event, edge) => {
           try { event?.stopPropagation?.(); } catch (e) {}
           _setSelectedNodeId(null);
+
+          if (editMode && deleteMode) {
+            deleteSelectedConnection(edge.id);
+            setSelectedEdgeId(null);
+            if (onEdgeSelect) onEdgeSelect(null, null);
+            return;
+          }
+
           setSelectedEdgeId(edge.id);
           if (onEdgeSelect) onEdgeSelect(edge.id, edge);
         }}

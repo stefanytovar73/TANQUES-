@@ -17,6 +17,22 @@ class TanquesController extends Controller
         $this->ibal = $ibal;
     }
 
+    public function bootstrapDistritos()
+    {
+        try {
+            return response()->json($this->ibal->obtenerDistritosBootstrap());
+        } catch (\Throwable $e) {
+            Log::error('Error cargando bootstrap de Distritos: ' . $e->getMessage());
+            return response()->json([
+                'status' => 'error',
+                'mensaje' => 'Error cargando telemetría de Distritos',
+                'tanques' => null,
+                'captacion' => null,
+                'ptap' => null,
+            ], 500);
+        }
+    }
+
     public function index()
     {
         try {

@@ -3672,15 +3672,17 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     if (duplicateIndex >= 0) return;
 
     const handles = assignAutoConnectionHandles(sourceId, targetId, nodesRef.current || [], nextEdges);
+    const requestedType = defaultEdgeType || 'smart';
+    const smartRoute = requestedType === 'smart';
     const nextEdge = {
       id: `${sourceId}-${targetId}`,
       source: sourceId,
       target: targetId,
       ...handles,
       markerEnd: { type: MarkerType.ArrowClosed, color: '#000', width: 10, height: 10 },
-      type: 'smart',
+      type: smartRoute ? 'smart' : requestedType,
       animated: false,
-      data: { routeMode: 'smart', autoPorts: true },
+      data: { routeMode: smartRoute ? 'smart' : 'manual', autoPorts: true },
       style: { stroke: '#000', strokeWidth: 3.5, strokeLinecap: 'round', strokeLinejoin: 'round' },
     };
 
@@ -3694,7 +3696,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     setEdges(balanced);
     edgesRef.current = balanced;
     persistConnection(balanced);
-  }, [connectDate, connectDateFormat, persistConnection]);
+  }, [connectDate, connectDateFormat, persistConnection, defaultEdgeType]);
 
   const beginConnectSelection = useCallback((nodeId) => {
     if (!nodeId) return;

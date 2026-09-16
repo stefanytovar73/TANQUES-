@@ -1885,6 +1885,15 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       setDiagramMode(diagramModeExternal);
     }
   }, [diagramModeExternal]);
+
+  // Mientras el usuario está moviendo/editando, las posiciones locales son
+  // autoritativas. Un eco WS atrasado no debe devolver los nodos a posiciones viejas.
+  const diagramModeRef = useRef(diagramMode);
+  const draftPositionsRef = useRef(new Map());
+  useEffect(() => {
+    diagramModeRef.current = diagramMode;
+  }, [diagramMode]);
+
   const [wsQueueSize, setWsQueueSize] = useState(0);
   const [wsConnected, setWsConnected] = useState(false);
   const [debugWsEnabled, setDebugWsEnabled] = useState(false);
@@ -2970,23 +2979,30 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     if (!idToUpdate || !nextType) return false;
 
     const currentNode = (nodesRef.current || []).find((n) => n.id === idToUpdate) || null;
-    if (!currentNode || currentNode.type !== 'shape') return false;
+    if (!currentNode) return false;
 
     const sourceData = (currentNode.data && currentNode.data.nodeData) || (currentNode.data || {});
     const currentShapeType = String(sourceData.shapeType || currentNode.shapeType || '').trim();
-    if (currentShapeType === nextType) return false;
+    if (currentNode.type === 'shape' && currentShapeType === nextType) return false;
 
     const updated = (nodesRef.current || []).map((n) => {
       if (n.id !== idToUpdate) return n;
+      const previousData = (n.data && n.data.nodeData) || (n.data || {});
       const nextNodeData = {
-        ...(n.data && n.data.nodeData ? n.data.nodeData : (n.data || {})),
+        ...previousData,
+        id: n.id,
+        type: 'shape',
         shapeType: nextType,
+        width: Number.isFinite(Number(previousData.width)) ? Number(previousData.width) : 120,
+        height: Number.isFinite(Number(previousData.height)) ? Number(previousData.height) : 68,
       };
       return {
         ...n,
         type: 'shape',
+        shapeType: nextType,
         data: {
           ...(n.data || {}),
+          type: 'shape',
           shapeType: nextType,
           nodeData: nextNodeData,
         },
@@ -3062,15 +3078,26 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
   const editUnlockAllNodes = useCallback(() => {
     try {
+      diagramModeRef.current = 'edit';
+
       // Obtener nodos actuales de ReactFlow (posiciones exactas en pantalla)
       const currentNodes = rfInstance && typeof rfInstance.getNodes === 'function'
         ? rfInstance.getNodes()
         : (nodesRef.current || []);
 
+      draftPositionsRef.current = new Map((currentNodes || []).map((n) => [
+        n.id,
+        sanitizePosition(n.position || {}),
+      ]));
+
       const updated = currentNodes.map((n) => {
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: false };
-        return { ...n, data: { ...(n.data || {}), nodeData: newNodeData } };
+        return {
+          ...n,
+          draggable: true,
+          data: { ...(n.data || {}), lockedPosition: false, nodeData: newNodeData },
+        };
       });
       nodesRef.current = updated;
       try { setNodes([...updated]); } catch (e) {}
@@ -3083,10 +3110,12 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       try { localStorage.setItem('district_locked', '0'); } catch (e) {}
       try { persistDistrictState(nodesRef.current, edgesRef.current, { force: true, locked: false }); } catch (e) {}
     } catch (e) { console.warn('[DISTRICT] editUnlockAllNodes failed', e && e.message); }
-  }, [rfInstance]);
+  }, [rfInstance, persistDistrictState, readDiagramState]);
 
   const saveAndLockAllNodes = useCallback(async () => {
     try {
+      diagramModeRef.current = 'view';
+
       // Obtener nodos actuales de ReactFlow (posiciones exactas donde el usuario los dejó)
       const currentNodes = rfInstance && typeof rfInstance.getNodes === 'function'
         ? rfInstance.getNodes()
@@ -3095,40 +3124,26 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       const updated = currentNodes.map((n) => {
         const prevData = (n.data && n.data.nodeData) || (n.data || {});
         const newNodeData = { ...(prevData || {}), lockedPosition: true };
-        return { ...n, data: { ...(n.data || {}), nodeData: newNodeData } };
+        return {
+          ...n,
+          draggable: false,
+          data: { ...(n.data || {}), lockedPosition: true, nodeData: newNodeData },
+        };
       });
       nodesRef.current = updated;
+      draftPositionsRef.current.clear();
       try { setNodes([...updated]); } catch (e) {}
 
-      // Persistir con las posiciones actuales exactas (local cache)
-      try { persistDistrictState(updated, edgesRef.current, { force: true, locked: true }); } catch (e) {}
-
-      // Also attempt immediate server save using the exact current nodes+edges
+      // Un solo camino de persistencia. Evita el POST duplicado + reload que
+      // podía dejar ganar a un snapshot viejo y reubicar el diagrama.
       try {
-        const payload = {};
-        payload._updatedAt = new Date().toISOString();
-        payload.nodes = {};
-        try {
-          const curNodes = rfInstance && typeof rfInstance.getNodes === 'function' ? rfInstance.getNodes() : (nodesRef.current || []);
-          for (const n of (curNodes || [])) {
-            // build persisted entry using same helper so fields match server expectations
-            try { payload.nodes[n.id] = getPersistedNodeEntry(n, (readDiagramState().nodes||{})[n.id] || {}); } catch (e) { payload.nodes[n.id] = getPersistedNodeEntry(n, {}); }
-          }
-        } catch (e) { /* fallback to nodesRef */
-          for (const n of (nodesRef.current || [])) {
-            payload.nodes[n.id] = getPersistedNodeEntry(n, {});
-          }
-        }
-        payload.edges = Array.isArray(edgesRef.current) ? edgesRef.current : [];
-        payload.hiddenNodeIds = (readDiagramState().hiddenNodeIds) || [];
-        payload.deletedNodeIds = (readDiagramState().deletedNodeIds) || [];
-        payload.district_locked = 1;
-        try {
-          await diagramService.saveState(payload);
-          console.log('[DIAGRAM] immediate exact save completed, reloading page');
-          try { window.location.reload(); } catch (e) { console.log('[DIAGRAM] reload failed', e && e.message); }
-        } catch (err) { console.warn('[DIAGRAM] immediate exact save failed', err && err.message); }
-      } catch (e) { console.warn('[DIAGRAM] build exact payload failed', e && e.message); }
+        persistDistrictState(updated, edgesRef.current, {
+          force: true,
+          locked: true,
+          sendToServer: true,
+          skipReadBaseline: true,
+        });
+      } catch (e) {}
     } catch (e) { console.warn('[DISTRICT] saveAndLockAllNodes failed', e && e.message); }
   }, [rfInstance, persistDistrictState]);
 
@@ -3387,11 +3402,35 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       const updated = current.map((n) => {
         const r = sanitizedRemote[n.id];
         if (!r) return n;
+        const editing = diagramModeRef.current === 'edit';
         const currentNodeData = (n.data && n.data.nodeData) ? n.data.nodeData : (n.data || {});
-        const mergedRemoteEntry = preserveLiveMetricValues(currentNodeData, r);
+        let mergedRemoteEntry = preserveLiveMetricValues(currentNodeData, r);
+
+        if (editing) {
+          // El usuario está editando: conservar el diseño local mientras sí
+          // permitimos que la telemetría viva continúe actualizándose.
+          mergedRemoteEntry = {
+            ...mergedRemoteEntry,
+            type: n.type || currentNodeData.type || r.type,
+            shapeType: currentNodeData.shapeType ?? r.shapeType,
+            width: currentNodeData.width ?? r.width,
+            height: currentNodeData.height ?? r.height,
+            rotation: currentNodeData.rotation ?? r.rotation,
+            customColor: currentNodeData.customColor ?? r.customColor,
+            color: currentNodeData.color ?? r.color,
+            customName: currentNodeData.customName ?? r.customName,
+            label: currentNodeData.label ?? r.label,
+            lockedPosition: false,
+          };
+        }
+
         const mergedVisual = preserveLiveMetricValues(n.data || {}, mergedRemoteEntry);
-        const position = sanitizePosition({ x: r.x, y: r.y });
-        const nodeData = ensureNodeData({ id: n.id, type: r.type, label: r.label, position, data: mergedVisual });
+        const draftPosition = draftPositionsRef.current.get(n.id);
+        const position = editing
+          ? sanitizePosition(draftPosition || n.position || { x: r.x, y: r.y })
+          : sanitizePosition({ x: r.x, y: r.y });
+        const effectiveType = editing ? (n.type || r.type || 'tank') : (r.type || n.type || 'tank');
+        const nodeData = ensureNodeData({ id: n.id, type: effectiveType, label: mergedRemoteEntry.label || r.label, position, data: mergedVisual });
 
         try {
           const manualPct = Number.isFinite(Number(nodeData.manual_porcentaje)) ? Number(nodeData.manual_porcentaje) : null;
@@ -3406,10 +3445,12 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         const visualData = stripRuntimeTelemetry({ ...(n.data || {}), ...mergedVisual });
         return {
           ...n,
+          type: effectiveType,
+          draggable: editing ? true : n.draggable,
           position,
           customName: nodeData.customName || n.customName || r.customName || '',
           label: nodeData.label || n.label || r.label || n.id,
-          data: { ...visualData, nodeData },
+          data: { ...visualData, type: effectiveType, lockedPosition: editing ? false : visualData.lockedPosition, nodeData },
         };
       });
 
@@ -4165,8 +4206,12 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       console.info('[DIAGRAM TRACE] DO_SAVE_ENTER');
       // Build authoritative snapshot from the current runtime view the user is seeing.
       // Do NOT read baseline, localStorage or prior savedState here — use nodesRef/edgesRef exactly.
-      const runtimeNodes = Array.isArray(nodesRef.current) ? nodesRef.current : [];
-      const runtimeEdges = Array.isArray(edgesRef.current) ? edgesRef.current : [];
+      const runtimeNodes = (rfInstance && typeof rfInstance.getNodes === 'function')
+        ? rfInstance.getNodes()
+        : (Array.isArray(nodesRef.current) ? nodesRef.current : []);
+      const runtimeEdges = (rfInstance && typeof rfInstance.getEdges === 'function')
+        ? rfInstance.getEdges()
+        : (Array.isArray(edgesRef.current) ? edgesRef.current : []);
 
       const saved = {
         // intentionally lightweight baseline fields omitted; we only persist nodes/edges
@@ -4191,8 +4236,16 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         }
       } catch (e) {}
 
-      // Perform explicit server save regardless of applyingRemoteRef guard — this is a user-initiated action.
+      // Esperar cualquier escritura automática anterior antes del Guardar explícito.
+      // Así el snapshot exacto que ve el usuario siempre es el último que llega al backend.
       try {
+        let waits = 0;
+        while (savingRef.current && waits < 80) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          waits += 1;
+        }
+        pendingServerSaveRef.current = null;
+
         try { window.__diagTrace.push('SAVE_STATE_CALL'); } catch(_){}
         console.info('[DIAGRAM TRACE] SAVE_STATE_CALL');
         const ok = await diagramService.saveState(saved);
@@ -4216,8 +4269,10 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         }
       } catch (e) {}
 
-      // reload to fetch authoritative saved state (existing behavior)
-      try { if (!(window && window.__diagTestPauseReload)) { window.location.reload(); } else { console.info('[DIAGRAM TRACE] RELOAD_SKIPPED_FOR_TEST'); } } catch (e) {}
+      // No recargar la página después de Guardar: el estado que ya ve el
+      // usuario es el snapshot recién confirmado por el backend.
+      setSaveMsg('ok');
+      setTimeout(() => setSaveMsg(null), 2500);
       return true;
     } catch (err) {
       try { setSaveMsg('error'); setTimeout(() => setSaveMsg(null), 3000); } catch (e) {}
@@ -4295,6 +4350,9 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       }));
 
       nodesRef.current = normalized;
+      if (node && node.id) {
+        draftPositionsRef.current.set(node.id, sanitizePosition(node.position || {}));
+      }
       // Reflect exact runtime snapshot into React state
       setNodes([...normalized]);
 
@@ -4329,6 +4387,9 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
   const onNodeDrag = useCallback((event, node) => {
     try {
+      if (node?.id) {
+        draftPositionsRef.current.set(node.id, sanitizePosition(node.position || {}));
+      }
       const start = dragStartPositionRef.current || { x: 0, y: 0 };
       const dx = Math.abs((node?.position?.x ?? 0) - (start.x ?? 0));
       const dy = Math.abs((node?.position?.y ?? 0) - (start.y ?? 0));
@@ -4350,6 +4411,9 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
         x: Number(node?.position?.x ?? 0),
         y: Number(node?.position?.y ?? 0),
       };
+      if (node?.id) {
+        draftPositionsRef.current.set(node.id, sanitizePosition(node.position || {}));
+      }
       _setSelectedNodeId(null);
       setSelectedEdgeId(null);
       if (onNodeSelect) onNodeSelect(null, null, { openDetails: false });
@@ -4820,7 +4884,16 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     if (!focusNodeId || !rfInstance) return;
     const n = nodes.find(x => x.id === focusNodeId);
     if (!n) return;
-    try { rfInstance.setCenter(n.position, { duration: 400 }); } catch (e) { if (rfInstance && rfInstance.fitView) rfInstance.fitView(); }
+    try {
+      const px = Number(n.position?.x ?? 0);
+      const py = Number(n.position?.y ?? 0);
+      const nd = n.data?.nodeData || n.data || {};
+      const w = Number(nd.width ?? n.width ?? 120) || 120;
+      const h = Number(nd.height ?? n.height ?? 80) || 80;
+      rfInstance.setCenter(px + (w / 2), py + (h / 2), { duration: 400 });
+    } catch (e) {
+      if (rfInstance && rfInstance.fitView) rfInstance.fitView({ padding: 0.12 });
+    }
   }, [focusNodeId, rfInstance, nodes]);
 
   // expose imperative methods to parent via ref

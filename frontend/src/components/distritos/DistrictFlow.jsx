@@ -2197,9 +2197,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       for (const [id, r] of Object.entries(sanitizedRemote)) {
         if (existingIds.has(id)) continue;
         const position = sanitizePosition({ x: r.x, y: r.y });
-        const nodeData = ensureNodeData({ id, type: r.type, label: r.label, position, data: r });
         const editingNow = diagramModeRef.current === 'edit';
         const effectiveLocked = editingNow ? false : !!r.lockedPosition;
+        const nodeData = ensureNodeData({
+          id,
+          type: r.type,
+          label: r.label,
+          position,
+          data: { ...r, lockedPosition: effectiveLocked },
+        });
         updated.push({
           id,
           type: r.type || 'tank',
@@ -2226,10 +2232,23 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       try { setNodes([...updated]); } catch (e) {}
       try { setEdges(normalizedEdges); } catch (e) {}
 
-      // Persist to localStorage only if autosave is enabled (respect user's preference)
-      try { if (autoSaveEnabledRef.current) localStorage.setItem('district_state', JSON.stringify(remote)); } catch (e) {}
+      // Nunca escribir un estado remoto crudo mientras el usuario está moviendo
+      // elementos: podría restaurar posiciones antiguas y provocar el "salto".
+      try {
+        if (autoSaveEnabledRef.current && diagramModeRef.current !== 'edit') {
+          const localMerged = {
+            ...remote,
+            nodes: Object.fromEntries(updated.map((n) => {
+              const previous = sanitizedRemote[n.id] || {};
+              return [n.id, getPersistedNodeEntry(n, previous)];
+            })),
+            edges: normalizedEdges,
+          };
+          localStorage.setItem('district_state', JSON.stringify(localMerged));
+        }
+      } catch (e) {}
     } catch (e) { /* ignore */ }
-  }, [showFlow]);
+  }, [showFlow, getPersistedNodeEntry]);
 
 
   const duplicateSelectedNode = useCallback((sourceId = selectedNodeId) => {

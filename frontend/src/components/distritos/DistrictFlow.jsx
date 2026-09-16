@@ -4792,14 +4792,21 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       if (node && node.id) {
         draftPositionsRef.current.set(node.id, sanitizePosition(node.position || {}));
       }
+
+      // Al terminar de mover un elemento, recalcular automáticamente de qué
+      // lado salen/entran las conexiones para conservar rutas limpias.
+      const rebalancedEdges = rebalanceSmartConnectionPorts(normalized, edgesRef.current || []);
+      edgesRef.current = rebalancedEdges;
+
       // Reflect exact runtime snapshot into React state
       setNodes([...normalized]);
+      setEdges([...rebalancedEdges]);
 
       // Persist using the exact snapshot; skip reading baseline to avoid overwriting
       if (!applyingRemoteRef.current) {
         const opId = `drag:${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
         try { console.debug('[DIAG] onNodeDragStop', opId, 'node=', node && node.id, 'rfNodes=', (rfInstance && rfInstance.getNodes) ? (rfInstance.getNodes()||[]).find(n=>n.id===node.id) : null); } catch (e) {}
-        persistDistrictState(normalized, edgesRef.current, { skipReadBaseline: true, _diagOpId: opId });
+        persistDistrictState(normalized, rebalancedEdges, { skipReadBaseline: true, _diagOpId: opId });
       }
       try { setOverlayVisible(true); } catch (e) {}
     } catch (e) {}

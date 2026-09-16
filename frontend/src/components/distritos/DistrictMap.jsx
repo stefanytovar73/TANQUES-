@@ -9,6 +9,7 @@ import { NODES as STATIC_NODES, CONNECTIONS as STATIC_CONNECTIONS } from './dist
 // TankNode/PlantNode/DistrictNode/Connection rendered inside DistrictFlow
 // DistrictToolbar removed to hide built-in zoom controls (lupas +, -, fit)
 import ElementDetails from './ElementDetails';
+import { appendTankHistory } from './tankHistory';
 import useTanques from '../../hooks/useTanques';
 import Tooltip from '@mui/material/Tooltip';
 import EditIcon from '@mui/icons-material/Edit';
@@ -130,6 +131,9 @@ export default function DistrictMap() {
 
   const catalog = useMemo(() => loadCatalog(), []);
   const mergedTanques = useMemo(() => mergeApiTanquesWithCatalog(tanques || [], catalog), [tanques, catalog]);
+  useEffect(() => {
+    try { appendTankHistory(mergedTanques || []); } catch (e) {}
+  }, [mergedTanques]);
   const ibalConnectionState = useMemo(() => {
     if (loading) return { label: 'Conectando con IBAL...', tone: 'neutral' };
     if (error) return { label: 'IBAL sin conexión', tone: 'error' };
@@ -253,6 +257,29 @@ export default function DistrictMap() {
   const [selectedNode, setSelectedNode] = useState(null);
   // Live reference to the last node object received from DistrictFlow's onNodeSelect callback
   const [selectedFlowNode, setSelectedFlowNode] = useState(null);
+
+  const selectedTankData = useMemo(() => {
+    const node = selectedNode || selectedFlowNode;
+    if (!node || node.type !== 'tank') return null;
+    const nd = node?.data?.nodeData || node?.data || {};
+    const wantedTag = String(nd?.tag || '').trim().toUpperCase();
+    if (wantedTag) {
+      const byTag = (mergedTanques || []).find((tank) => String(tank?.tag || '').trim().toUpperCase() === wantedTag);
+      if (byTag) return byTag;
+    }
+
+    const candidates = [
+      nd?.apiName, nd?.originalName, nd?.display_name, nd?.nombre, nd?.label,
+      node?.label, node?.customName,
+    ].filter(Boolean).map((value) => String(value).trim().toLowerCase());
+
+    return (mergedTanques || []).find((tank) => {
+      const tankNames = [tank?.display_name, tank?.nombre, tank?.tag]
+        .filter(Boolean)
+        .map((value) => String(value).trim().toLowerCase());
+      return candidates.some((candidate) => tankNames.includes(candidate));
+    }) || null;
+  }, [selectedNode, selectedFlowNode, mergedTanques]);
 
   const handleNodeSelect = useCallback((id, node, options = {}) => {
     const resolvedId = id || node?.id || flowRef.current?.getSelectedNodeId?.() || null;
@@ -1040,7 +1067,7 @@ export default function DistrictMap() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
 
-      <ElementDetails open={!!selectedNode} onClose={() => { setDetailsDismissedId(selectedNode?.id || selectedId || null); setSelectedNode(null); setSelectedId(null); setShowConnections(false); }} node={selectedNode || null} nodes={nodes} connections={resolvedConnections} onShowConnections={() => {
+      <ElementDetails open={!!selectedNode} onClose={() => { setDetailsDismissedId(selectedNode?.id || selectedId || null); setSelectedNode(null); setSelectedId(null); setShowConnections(false); }} node={selectedNode || null} tankData={selectedTankData} nodes={nodes} connections={resolvedConnections} onShowConnections={() => {
         if (!selectedNode) return;
         setShowConnections(s => !s);
         centerOn(selectedNode);
@@ -1048,6 +1075,15 @@ export default function DistrictMap() {
         if (!selectedId) return;
         if (flowRef.current && typeof flowRef.current.renameSelectedNode === 'function') {
           flowRef.current.renameSelectedNode(selectedId, nextLabel);
+          window.setTimeout(() => {
+            try {
+              const live = flowRef.current?.getNodeById?.(selectedId) || null;
+              if (live) {
+                setSelectedNode(live);
+                setSelectedFlowNode(live);
+              }
+            } catch (e) {}
+          }, 0);
         }
       }} onDelete={() => {
         if (!selectedId) return;

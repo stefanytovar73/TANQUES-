@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import tanqueService from "../services/tanqueService";
 
 export default function useTanques() {
-    const [tanques, setTanques] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const initialCached = tanqueService.peekTanques?.() || null;
+    const [tanques, setTanques] = useState(() => (initialCached && Array.isArray(initialCached.tanques) ? initialCached.tanques : []));
+    const [loading, setLoading] = useState(() => !(initialCached && Array.isArray(initialCached.tanques)));
     const [error, setError] = useState(null);
 
     // forceRefresh=true fuerza una nueva solicitud a la API ignorando el caché
@@ -25,8 +26,11 @@ export default function useTanques() {
     };
 
     useEffect(() => {
-        cargarTanques(true);
-        // Sondeo cada 30 s con forceRefresh=true para bypassar el caché
+        // Si ya existe un payload reciente, pintar inmediatamente y refrescar en
+        // segundo plano. En una entrada en frío seguimos mostrando el layout
+        // estático mientras llega la API.
+        cargarTanques(!initialCached, false);
+        // Sondeo cada 30 s con forceRefresh=true para bypassar el caché.
         const intervalo = window.setInterval(() => cargarTanques(false, true), 30000);
         return () => clearInterval(intervalo);
     }, []);

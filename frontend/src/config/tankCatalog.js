@@ -229,27 +229,27 @@ const calculateDisplayPorcentaje = (tank, explicitHeight = null) => {
         return raw == null ? null : Math.round(raw);
     }
 
-    // porcentaje_capacidad es autoritativo cuando IBAL incluye el campo,
-    // incluso cuando su valor es null. No inventar un porcentaje local en ese caso.
+    // El porcentaje numérico que entrega IBAL manda. Si IBAL envía null/blank,
+    // continuar con la altura calibrada local para reproducir el dashboard oficial.
     if (Object.prototype.hasOwnProperty.call(tank, "porcentaje_capacidad")) {
         const value = tank.porcentaje_capacidad;
-        return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
-            ? Number(value)
-            : null;
+        if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) {
+            return Number(value);
+        }
     }
 
     if (Object.prototype.hasOwnProperty.call(tank, "porcentaje_capacidad_api")) {
         const value = tank.porcentaje_capacidad_api;
-        return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
-            ? Number(value)
-            : null;
+        if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) {
+            return Number(value);
+        }
     }
 
     if (Object.prototype.hasOwnProperty.call(tank, "porcentaje_api")) {
         const value = tank.porcentaje_api;
-        return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
-            ? Number(value)
-            : null;
+        if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) {
+            return Number(value);
+        }
     }
 
     const legacyPercentage = [tank.porcentaje, tank.pct]
@@ -281,7 +281,9 @@ const sanitizeTankForDisplay = (tank) => {
     const sanitized = { ...tank };
     // Preservar los valores raw de la API antes de limpiar campos calculados previos.
     // porcentaje_capacidad es el campo real que devuelve IBAL; NO borrarlo si no hay porcentaje ya computado.
-    const rawPorcentajeCapacidad = Number.isFinite(Number(sanitized.porcentaje_capacidad)) ? Number(sanitized.porcentaje_capacidad) : null;
+    const rawPorcentajeCapacidad = (sanitized.porcentaje_capacidad !== null && sanitized.porcentaje_capacidad !== undefined && sanitized.porcentaje_capacidad !== '' && Number.isFinite(Number(sanitized.porcentaje_capacidad)))
+        ? Number(sanitized.porcentaje_capacidad)
+        : null;
     delete sanitized.porcentaje;
     delete sanitized.porcentaje_api;
     delete sanitized.porcentaje_capacidad_api;
@@ -389,7 +391,7 @@ const mergeTankWithCatalog = (tank, catalog) => {
         // solo sirven de respaldo para sensores donde IBAL todavía envía null.
         porcentaje_api: hasExplicitPercentage ? Number(apiPorcentaje) : computedPorcentaje,
         porcentaje_capacidad: hasExplicitPercentage ? Number(apiPorcentaje) : computedPorcentaje,
-        porcentaje_capacidad_api: Number.isFinite(Number(sourceTank.porcentaje_capacidad)) ? Number(sourceTank.porcentaje_capacidad) : null,
+        porcentaje_capacidad_api: (sourceTank.porcentaje_capacidad !== null && sourceTank.porcentaje_capacidad !== undefined && sourceTank.porcentaje_capacidad !== '' && Number.isFinite(Number(sourceTank.porcentaje_capacidad))) ? Number(sourceTank.porcentaje_capacidad) : null,
         porcentaje: hasExplicitPercentage ? Number(apiPorcentaje) : computedPorcentaje,
         nivel: nivelActual,
         valor_m: sourceTank.valor_m,

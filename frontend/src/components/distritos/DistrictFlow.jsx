@@ -348,6 +348,19 @@ function _notifyPtapMetrics(map) {
 // metrics; tank polling was reverted per user request.
 
 async function _loadPtapMetrics() {
+  // Pintar primero el último PTAP conocido para que Mackenfloc/caudales aparezcan
+  // al mismo tiempo que los tanques durante una recarga.
+  try {
+    const cached = tanqueService.peekPtap?.();
+    if (cached) {
+      const cachedMap = {};
+      for (const variable of (cached?.variables || [])) {
+        if (variable?.tag) cachedMap[variable.tag] = variable;
+      }
+      if (Object.keys(cachedMap).length) _notifyPtapMetrics(cachedMap);
+    }
+  } catch (e) {}
+
   if (_ptapMetricsLoading) return _ptapMetricsLoading;
   _ptapMetricsLoading = tanqueService.getPtap()
     .then((res) => {
@@ -2043,7 +2056,9 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
       if (!isStructuralState(safe)) return;
 
-      const timestamp = safe.updated_at || safe._updatedAt || safe.updatedAt || new Date().toISOString();
+      const timestamp = source === 'remote'
+        ? (safe.updated_at || safe._updatedAt || safe.updatedAt || new Date().toISOString())
+        : new Date().toISOString();
       safe.updated_at = timestamp;
       safe._updatedAt = timestamp;
       safe.updatedAt = timestamp;
@@ -2073,17 +2088,26 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           return;
         }
 
-        // perform server save directly (no auto-backoff loop here: rely on service)
-        (async () => {
-          try {
-            await diagramService.saveState(safe);
-            try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
-            // Do NOT broadcast from client; backend is expected to emit WS update.
-          } catch (err) {
-            // propagate error to caller via console and keep local storage intact
-            console.warn('[DIAGRAM] saveState failed', err);
-          }
-        })();
+        // Serializar escrituras: nunca permitir que una petición vieja termine
+        // después de una nueva y restaure un diseño anterior.
+        pendingServerSaveRef.current = JSON.parse(JSON.stringify(safe));
+        if (!savingRef.current) {
+          savingRef.current = true;
+          (async () => {
+            try {
+              while (pendingServerSaveRef.current) {
+                const payload = pendingServerSaveRef.current;
+                pendingServerSaveRef.current = null;
+                await diagramService.saveState(payload);
+              }
+              try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
+            } catch (err) {
+              console.warn('[DIAGRAM] saveState failed', err);
+            } finally {
+              savingRef.current = false;
+            }
+          })();
+        }
       }
     } catch (e) {}
   }, []);
@@ -2134,6 +2158,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
             const msg = JSON.parse(ev.data || '{}');
             if (!msg || typeof msg !== 'object') return;
             if (msg.type === 'diagram:update') {
+              if (savingRef.current || pendingServerSaveRef.current || dragMovedRef.current) return;
               const remote = msg.state || {};
               const remoteTs = (remote.updated_at || remote.updatedAt || remote._updatedAt || msg.updated_at || '').toString();
               const localRaw = (function() { try { return localStorage.getItem('district_state') || '{}'; } catch (e) { return '{}'; }})();
@@ -2661,7 +2686,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       width: safeWidth,
       height: safeHeight,
       rotation: safeRotation,
-      lockedPosition: prev.lockedPosition || false,
+      lockedPosition: source.lockedPosition ?? node?.data?.lockedPosition ?? prev.lockedPosition ?? false,
       // persist key metric/display fields so duplicated or user-added nodes keep their values
       valor_m: source.valor_m ?? source.nivel ?? prev.valor_m ?? prev.nivel ?? null,
       nivel: source.nivel ?? source.valor_m ?? prev.nivel ?? prev.valor_m ?? null,
@@ -2816,7 +2841,7 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
                 try { console.debug('[TRACE] persistDistrictState preparing payload for', window.__TRACE_NODE_ID, (raw && raw.nodes) ? raw.nodes[window.__TRACE_NODE_ID] : null); } catch (e) {}
               }
             } catch (e) {}
-            writeDiagramState(raw, options || {});
+            writeDiagramState(raw, { ...(options || {}), sendToServer: options.sendToServer !== false });
             try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
           }
         } catch (e) { /* validation errors -> mark dirty */ try { if (typeof onDirtyChanged === 'function') onDirtyChanged(true); } catch (err) {} }
@@ -2951,7 +2976,14 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
 
     nodesRef.current = updated;
     setNodes([...updated]);
-    try { persistDistrictState(updated, edgesRef.current); } catch (e) {}
+    try {
+      persistDistrictState(updated, edgesRef.current, {
+        force: true,
+        skipReadBaseline: true,
+        sendToServer: true,
+        _diagOpId: `shape:${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+      });
+    } catch (e) {}
     return true;
   }, [selectedNodeId, persistDistrictState]);
 
@@ -3294,7 +3326,11 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       const localRaw = (function() { try { return localStorage.getItem('district_state') || '{}'; } catch (e) { return '{}'; }})();
       const localState = JSON.parse(localRaw || '{}');
       const localTs = (localState.updated_at || localState.updatedAt || localState._updatedAt || '').toString();
-      if (remoteTs && localTs && remoteTs < localTs) return;
+      if (remoteTs && localTs) {
+        const remoteTime = new Date(remoteTs).getTime();
+        const localTime = new Date(localTs).getTime();
+        if (Number.isFinite(remoteTime) && Number.isFinite(localTime) && remoteTime < localTime) return;
+      }
 
       const remoteNodes = remote.nodes && typeof remote.nodes === 'object' ? remote.nodes : {};
       const remoteEdges = Array.isArray(remote.edges) ? remote.edges : [];
@@ -4194,17 +4230,18 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
       // Always keep the ref in sync with the exact React Flow snapshot before persisting.
       nodesRef.current = next;
       if (applyingRemoteRef.current) return next;
-      const hasPositionChange = changes.some(c => c.type === 'position' && c.dragging);
       const hasRemove = changes.some(c => c.type === 'remove');
-      if (hasRemove) {
-        persistDistrictState(next, edgesRef.current, { skipReadBaseline: true, force: true, _diagOpId: `onNodesChange-remove:${Date.now()}-${Math.random().toString(36).slice(2,7)}` });
-        return next;
+      const hasStructuralChange = changes.some(c => c.type === 'add' || c.type === 'reset');
+      if (hasRemove || hasStructuralChange) {
+        persistDistrictState(next, edgesRef.current, {
+          skipReadBaseline: true,
+          force: true,
+          sendToServer: true,
+          _diagOpId: `onNodesChange-structural:${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+        });
       }
-      // Solo persistir en localStorage en cambios que NO sean de posición durante drag
-      // (la posición final se persiste en onNodeDragStop)
-      if (!hasPositionChange) {
-        persistDistrictState(next, edgesRef.current, { skipReadBaseline: true, _diagOpId: `onNodesChange:${Date.now()}-${Math.random().toString(36).slice(2,7)}` });
-      }
+      // position durante drag se guarda en onNodeDragStop; select/dimensions son
+      // cambios internos de ReactFlow y no deben generar POST.
       return next;
     });
   }, [persistDistrictState]);
@@ -4213,7 +4250,10 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
     setEdges((eds) => {
       const next = applyEdgeChanges(changes, eds);
       edgesRef.current = next;
-      if (!applyingRemoteRef.current) persistDistrictState(nodesRef.current, next);
+      const hasDesignChange = (changes || []).some((change) => change?.type !== 'select');
+      if (!applyingRemoteRef.current && hasDesignChange) {
+        persistDistrictState(nodesRef.current, next, { force: true, sendToServer: true });
+      }
       return next;
     });
   }, [persistDistrictState]);

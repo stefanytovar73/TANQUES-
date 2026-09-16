@@ -75,7 +75,15 @@ export default function DistrictMap() {
   const [connectionLabel, setConnectionLabel] = useState('');
   const [snack, setSnack] = useState({ open: false, msg: '' });
   const [edgeLineType, setEdgeLineType] = useState(() => {
-    try { return localStorage.getItem('district_edge_line_type') || 'straight'; } catch (e) { return 'straight'; }
+    try {
+      const migrated = localStorage.getItem('district_smart_routing_v1') === '1';
+      if (!migrated) {
+        localStorage.setItem('district_smart_routing_v1', '1');
+        localStorage.setItem('district_edge_line_type', 'smart');
+        return 'smart';
+      }
+      return localStorage.getItem('district_edge_line_type') || 'smart';
+    } catch (e) { return 'smart'; }
   });
   // Modo diagrama: 'edit' = arrastrables | 'view' = solo visual
   const [diagramMode, setDiagramMode] = useState(() => {

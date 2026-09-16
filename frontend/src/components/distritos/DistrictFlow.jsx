@@ -170,9 +170,16 @@ function textMatchesComparableAlias(sourceValue, targetValue) {
 
 function getStableRuntimeShapeName(nodeData = {}) {
   const safeNodeData = nodeData && typeof nodeData === 'object' ? nodeData : {};
+  const custom = [safeNodeData.customName, safeNodeData.diagramName]
+    .filter((value) => value != null && String(value).trim())
+    .map((value) => String(value).trim())
+    .find(Boolean);
+  if (custom) return custom;
+
   const rawNodeId = String(safeNodeData.id || '').trim();
   if (rawNodeId && STABLE_SHAPE_NAME_BY_ID[rawNodeId]) return STABLE_SHAPE_NAME_BY_ID[rawNodeId];
-  const fallback = [safeNodeData.customName, safeNodeData.label, safeNodeData.display_name, safeNodeData.nombre, safeNodeData.apiName, safeNodeData.originalName]
+
+  const fallback = [safeNodeData.label, safeNodeData.display_name, safeNodeData.nombre, safeNodeData.apiName, safeNodeData.originalName]
     .filter((value) => value != null && String(value).trim())
     .map((value) => String(value).trim())
     .find(Boolean);
@@ -358,7 +365,7 @@ async function _loadPtapMetrics() {
     const cached = tanqueService.peekPtap?.();
     if (cached) {
       const cachedMap = {};
-      for (const variable of (cached?.variables || [])) {
+      for (const variable of extractMetricVariables(cached)) {
         if (variable?.tag) cachedMap[variable.tag] = variable;
       }
       if (Object.keys(cachedMap).length) _notifyPtapMetrics(cachedMap);
@@ -369,7 +376,7 @@ async function _loadPtapMetrics() {
   _ptapMetricsLoading = tanqueService.getPtap()
     .then((res) => {
       const map = {};
-      for (const variable of (res?.variables || [])) {
+      for (const variable of extractMetricVariables(res)) {
         if (variable?.tag) map[variable.tag] = variable;
       }
       _notifyPtapMetrics(map);
@@ -385,6 +392,26 @@ function _ensurePtapMetricsPolling() {
   _ptapMetricsPollingStarted = true;
   _loadPtapMetrics();
   setInterval(_loadPtapMetrics, 60000);
+}
+
+function extractMetricVariables(response) {
+  if (!response || typeof response !== 'object') return [];
+
+  const candidates = [
+    response.variables,
+    response.ptap,
+    response.captacion,
+    response.data?.variables,
+    response.data?.ptap,
+    response.data?.captacion,
+    Array.isArray(response.data) ? response.data : null,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+
+  return [];
 }
 
 function parseMetricNumber(value) {
@@ -741,7 +768,7 @@ function getMetricConfigForNodeId(nodeId, nodeData = {}) {
 }
 
 function findFlowMetricVariable(response, config = {}) {
-  const variables = Array.isArray(response?.variables) ? response.variables : [];
+  const variables = extractMetricVariables(response);
   if (!variables.length) return null;
 
   const candidateTags = [
@@ -1843,11 +1870,14 @@ function FlowPlantNode(props) {
 
   useEffect(() => {
     let mounted = true;
+    let timer = null;
 
-    const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {});
-    if (cachedLabel != null) setMetricLabel(cachedLabel);
+    const refreshMetric = async () => {
+      const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {});
+      if (mounted && cachedLabel !== null && cachedLabel !== undefined && cachedLabel !== '') {
+        setMetricLabel(cachedLabel);
+      }
 
-    (async () => {
       try {
         if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId, nodeData || data || {})) {
           if (mounted) setMetricLabel(null);
@@ -1855,13 +1885,18 @@ function FlowPlantNode(props) {
         }
 
         const label = await loadFlowMetricForNodeId(metricNodeId, nodeData || data || {});
-        if (mounted && label != null) setMetricLabel(label);
+        if (mounted && label !== null && label !== undefined && label !== '') setMetricLabel(label);
       } catch (error) {
         // Conservar el último dato visible si el refresco falla.
       }
-    })();
+    };
 
-    return () => { mounted = false; };
+    refreshMetric();
+    timer = setInterval(refreshMetric, 30000);
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
   }, [metricNodeId]);
 
   const saveLabel = () => {

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState, useRef, useImperativeHandle } from 'react';
 import { format as formatDateFn } from 'date-fns';
-import ReactFlow, { addEdge, Background, MarkerType, Handle, Position, applyNodeChanges, applyEdgeChanges } from 'reactflow';
+import ReactFlow, { addEdge, Background, MarkerType, Handle, Position, BaseEdge, useStore, applyNodeChanges, applyEdgeChanges } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
 import TankNode from './TankNode';
@@ -984,6 +984,340 @@ function getLayoutedElements(nodes, edges, direction = 'LR') {
   const layoutedEdges = edges.map((e) => ({ ...e, markerEnd: { type: MarkerType.ArrowClosed } }));
   return { nodes: layoutedNodes, edges: layoutedEdges };
 }
+
+const AUTO_PORT_COUNT = 8;
+const AUTO_PORT_FRACTIONS = Array.from({ length: AUTO_PORT_COUNT }, (_, index) =>
+  0.14 + ((0.72 * index) / Math.max(1, AUTO_PORT_COUNT - 1))
+);
+
+const AUTO_HANDLE_STYLE = {
+  width: 3,
+  height: 3,
+  opacity: 0,
+  background: 'transparent',
+  border: 'none',
+  boxShadow: 'none',
+  pointerEvents: 'none',
+  zIndex: 0,
+};
+
+function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68 }) {
+  const width = Math.max(1, Number(right) - Number(left));
+  const height = Math.max(1, Number(bottom) - Number(top));
+  return (
+    <>
+      {AUTO_PORT_FRACTIONS.map((fraction, index) => {
+        const y = Number(top) + (height * fraction);
+        const x = Number(left) + (width * fraction);
+        return (
+          <React.Fragment key={index}>
+            <Handle type="source" position={Position.Left} id={`s-left-${index}`} style={{ ...AUTO_HANDLE_STYLE, left, top: y }} />
+            <Handle type="target" position={Position.Left} id={`t-left-${index}`} style={{ ...AUTO_HANDLE_STYLE, left, top: y }} />
+            <Handle type="source" position={Position.Right} id={`s-right-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: right, top: y }} />
+            <Handle type="target" position={Position.Right} id={`t-right-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: right, top: y }} />
+            <Handle type="source" position={Position.Top} id={`s-top-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top }} />
+            <Handle type="target" position={Position.Top} id={`t-top-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top }} />
+            <Handle type="source" position={Position.Bottom} id={`s-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
+            <Handle type="target" position={Position.Bottom} id={`t-bottom-${index}`} style={{ ...AUTO_HANDLE_STYLE, left: x, top: bottom }} />
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function getRoutingNodeSize(node = {}) {
+  const data = node?.data?.nodeData || node?.data || {};
+  const type = String(node?.type || data?.type || 'shape').toLowerCase();
+  const width = Number(node?.width ?? data?.width);
+  const height = Number(node?.height ?? data?.height);
+  return {
+    width: Number.isFinite(width) && width > 0 ? width : (type === 'tank' ? 160 : type === 'plant' ? 200 : type === 'district' ? 160 : 120),
+    height: Number.isFinite(height) && height > 0 ? height : (type === 'tank' ? 200 : type === 'plant' ? 80 : type === 'district' ? 48 : 68),
+  };
+}
+
+function getRoutingNodeBox(node = {}) {
+  const size = getRoutingNodeSize(node);
+  const position = node?.positionAbsolute || node?.internals?.positionAbsolute || node?.position || { x: 0, y: 0 };
+  const x = Number(position?.x || 0);
+  const y = Number(position?.y || 0);
+  return {
+    id: String(node?.id || ''),
+    x,
+    y,
+    width: size.width,
+    height: size.height,
+    left: x,
+    right: x + size.width,
+    top: y,
+    bottom: y + size.height,
+    cx: x + (size.width / 2),
+    cy: y + (size.height / 2),
+    shapeType: String(node?.data?.nodeData?.shapeType || node?.data?.shapeType || '').toLowerCase(),
+  };
+}
+
+function getPreferredConnectionSides(sourceBox, targetBox) {
+  const dx = targetBox.cx - sourceBox.cx;
+  const dy = targetBox.cy - sourceBox.cy;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
+  }
+  return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
+}
+
+function getPortFractionForSide(box, side, otherBox) {
+  if (side === 'left' || side === 'right') {
+    return Math.max(0.14, Math.min(0.86, (otherBox.cy - box.top) / Math.max(1, box.height)));
+  }
+  return Math.max(0.14, Math.min(0.86, (otherBox.cx - box.left) / Math.max(1, box.width)));
+}
+
+function chooseAutoPortIndex({ nodeId, side, otherBox, nodeBox, edges = [], source = true }) {
+  const prefix = source ? 's' : 't';
+  const desired = getPortFractionForSide(nodeBox, side, otherBox);
+  let bestIndex = 0;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < AUTO_PORT_COUNT; index += 1) {
+    const handleId = `${prefix}-${side}-${index}`;
+    const occupancy = edges.reduce((count, edge) => {
+      if (source) return count + ((String(edge?.source || '') === String(nodeId) && edge?.sourceHandle === handleId) ? 1 : 0);
+      return count + ((String(edge?.target || '') === String(nodeId) && edge?.targetHandle === handleId) ? 1 : 0);
+    }, 0);
+    const score = (occupancy * 100) + Math.abs(AUTO_PORT_FRACTIONS[index] - desired);
+    if (score < bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
+}
+
+function assignAutoConnectionHandles(sourceId, targetId, nodes = [], edges = []) {
+  const sourceNode = nodes.find((node) => String(node?.id) === String(sourceId));
+  const targetNode = nodes.find((node) => String(node?.id) === String(targetId));
+  if (!sourceNode || !targetNode) {
+    return { sourceHandle: 's-right-3', targetHandle: 't-left-3' };
+  }
+
+  const sourceBox = getRoutingNodeBox(sourceNode);
+  const targetBox = getRoutingNodeBox(targetNode);
+  const [sourceSide, targetSide] = getPreferredConnectionSides(sourceBox, targetBox);
+  const sourceIndex = chooseAutoPortIndex({ nodeId: sourceId, side: sourceSide, otherBox: targetBox, nodeBox: sourceBox, edges, source: true });
+  const targetIndex = chooseAutoPortIndex({ nodeId: targetId, side: targetSide, otherBox: sourceBox, nodeBox: targetBox, edges, source: false });
+
+  return {
+    sourceHandle: `s-${sourceSide}-${sourceIndex}`,
+    targetHandle: `t-${targetSide}-${targetIndex}`,
+  };
+}
+
+function rebalanceSmartConnectionPorts(nodes = [], edges = []) {
+  const routed = [];
+  for (const edge of (edges || [])) {
+    const handles = assignAutoConnectionHandles(edge.source, edge.target, nodes, routed);
+    const routeMode = edge?.data?.routeMode === 'manual' ? 'manual' : 'smart';
+    routed.push({
+      ...edge,
+      ...handles,
+      type: routeMode === 'manual' ? (edge.type || 'step') : 'smart',
+      data: { ...(edge.data || {}), routeMode, autoPorts: true },
+    });
+  }
+  return routed;
+}
+
+function getPositionVector(position, fallbackX = 1, fallbackY = 0) {
+  if (position === Position.Left) return { x: -1, y: 0 };
+  if (position === Position.Right) return { x: 1, y: 0 };
+  if (position === Position.Top) return { x: 0, y: -1 };
+  if (position === Position.Bottom) return { x: 0, y: 1 };
+  if (Math.abs(fallbackX) >= Math.abs(fallbackY)) return { x: fallbackX >= 0 ? 1 : -1, y: 0 };
+  return { x: 0, y: fallbackY >= 0 ? 1 : -1 };
+}
+
+function compactOrthogonalPoints(points = []) {
+  const clean = [];
+  for (const point of points) {
+    if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) continue;
+    const p = { x: Number(point.x), y: Number(point.y) };
+    const previous = clean[clean.length - 1];
+    if (previous && previous.x === p.x && previous.y === p.y) continue;
+    clean.push(p);
+  }
+  let changed = true;
+  while (changed && clean.length > 2) {
+    changed = false;
+    for (let i = 1; i < clean.length - 1; i += 1) {
+      const a = clean[i - 1];
+      const b = clean[i];
+      const d = clean[i + 1];
+      if ((a.x === b.x && b.x === d.x) || (a.y === b.y && b.y === d.y)) {
+        clean.splice(i, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return clean;
+}
+
+function segmentHitsRect(a, b, rect) {
+  const pad = 12;
+  const left = rect.left - pad;
+  const right = rect.right + pad;
+  const top = rect.top - pad;
+  const bottom = rect.bottom + pad;
+  if (a.x === b.x) {
+    return a.x > left && a.x < right && Math.max(a.y, b.y) > top && Math.min(a.y, b.y) < bottom;
+  }
+  if (a.y === b.y) {
+    return a.y > top && a.y < bottom && Math.max(a.x, b.x) > left && Math.min(a.x, b.x) < right;
+  }
+  return false;
+}
+
+function scoreOrthogonalRoute(points, obstacles) {
+  let collisions = 0;
+  let length = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    length += Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+    for (const rect of obstacles) {
+      if (segmentHitsRect(a, b, rect)) collisions += 1;
+    }
+  }
+  return (collisions * 100000) + length + (Math.max(0, points.length - 2) * 8);
+}
+
+function buildRoundedOrthogonalPath(points = [], radius = 7) {
+  const p = compactOrthogonalPoints(points);
+  if (!p.length) return '';
+  if (p.length === 1) return `M ${p[0].x} ${p[0].y}`;
+
+  let path = `M ${p[0].x} ${p[0].y}`;
+  for (let i = 1; i < p.length - 1; i += 1) {
+    const previous = p[i - 1];
+    const current = p[i];
+    const next = p[i + 1];
+    const incoming = Math.abs(current.x - previous.x) + Math.abs(current.y - previous.y);
+    const outgoing = Math.abs(next.x - current.x) + Math.abs(next.y - current.y);
+    const r = Math.min(radius, incoming / 2, outgoing / 2);
+    const before = {
+      x: current.x + (previous.x === current.x ? 0 : (previous.x < current.x ? -r : r)),
+      y: current.y + (previous.y === current.y ? 0 : (previous.y < current.y ? -r : r)),
+    };
+    const after = {
+      x: current.x + (next.x === current.x ? 0 : (next.x < current.x ? -r : r)),
+      y: current.y + (next.y === current.y ? 0 : (next.y < current.y ? -r : r)),
+    };
+    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+  }
+  const last = p[p.length - 1];
+  path += ` L ${last.x} ${last.y}`;
+  return path;
+}
+
+function SmartDistrictEdge(props) {
+  const nodeInternals = useStore((state) => state.nodeInternals);
+  const storeEdges = useStore((state) => state.edges);
+
+  const {
+    id, source, target, sourceX, sourceY, targetX, targetY,
+    sourcePosition, targetPosition, markerEnd, style, selected,
+  } = props;
+
+  const internals = Array.from(nodeInternals?.values?.() || []);
+  const obstacleRects = internals
+    .filter((node) => String(node?.id) !== String(source) && String(node?.id) !== String(target))
+    .map(getRoutingNodeBox)
+    .filter((box) => box.shapeType !== 'line');
+
+  const siblings = (storeEdges || [])
+    .filter((edge) => String(edge?.source) === String(source))
+    .slice()
+    .sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
+  const siblingIndex = Math.max(0, siblings.findIndex((edge) => String(edge?.id) === String(id)));
+  const laneOffset = (siblingIndex - ((Math.max(1, siblings.length) - 1) / 2)) * 9;
+
+  const sx = Number(sourceX);
+  const sy = Number(sourceY);
+  const tx = Number(targetX);
+  const ty = Number(targetY);
+  const sourceVector = getPositionVector(sourcePosition, tx - sx, ty - sy);
+  const targetVector = getPositionVector(targetPosition, sx - tx, sy - ty);
+  const stubDistance = 24 + Math.min(22, Math.abs(laneOffset));
+  const sourceStub = { x: sx + (sourceVector.x * stubDistance), y: sy + (sourceVector.y * stubDistance) };
+  const targetStub = { x: tx + (targetVector.x * stubDistance), y: ty + (targetVector.y * stubDistance) };
+
+  const allRects = obstacleRects.length ? obstacleRects : [{ left: Math.min(sx, tx), right: Math.max(sx, tx), top: Math.min(sy, ty), bottom: Math.max(sy, ty) }];
+  const minLeft = Math.min(sx, tx, ...allRects.map((r) => r.left));
+  const maxRight = Math.max(sx, tx, ...allRects.map((r) => r.right));
+  const minTop = Math.min(sy, ty, ...allRects.map((r) => r.top));
+  const maxBottom = Math.max(sy, ty, ...allRects.map((r) => r.bottom));
+  const midX = ((sourceStub.x + targetStub.x) / 2) + laneOffset;
+  const midY = ((sourceStub.y + targetStub.y) / 2) + laneOffset;
+  const outerGap = 30 + Math.abs(laneOffset);
+
+  const candidates = [
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: midX, y: sourceStub.y },
+      { x: midX, y: targetStub.y },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: sourceStub.x, y: midY },
+      { x: targetStub.x, y: midY },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: sourceStub.x, y: minTop - outerGap },
+      { x: targetStub.x, y: minTop - outerGap },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: sourceStub.x, y: maxBottom + outerGap },
+      { x: targetStub.x, y: maxBottom + outerGap },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: minLeft - outerGap, y: sourceStub.y },
+      { x: minLeft - outerGap, y: targetStub.y },
+      targetStub, { x: tx, y: ty },
+    ],
+    [
+      { x: sx, y: sy }, sourceStub,
+      { x: maxRight + outerGap, y: sourceStub.y },
+      { x: maxRight + outerGap, y: targetStub.y },
+      targetStub, { x: tx, y: ty },
+    ],
+  ].map(compactOrthogonalPoints);
+
+  const best = candidates
+    .map((points) => ({ points, score: scoreOrthogonalRoute(points, obstacleRects) }))
+    .sort((a, b) => a.score - b.score)[0]?.points || candidates[0];
+
+  const path = buildRoundedOrthogonalPath(best);
+  const visibleStyle = {
+    ...(style || {}),
+    fill: 'none',
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    ...(selected ? { filter: 'drop-shadow(0 0 2px rgba(37,99,235,0.55))' } : {}),
+  };
+
+  return <BaseEdge id={id} path={path} markerEnd={markerEnd} style={visibleStyle} />;
+}
+
+const EDGE_TYPES = { smart: SmartDistrictEdge };
 
 // Wrapper node components for React Flow
 function FlowTankNode(props) {

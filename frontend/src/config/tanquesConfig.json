@@ -11,8 +11,8 @@
   { "aliases": ["tanque alsacia", "alsacia", "la alsacia", "alsacia salado"], "displayName": "Alsacia", "areaTanque": 337.067, "alturaRebose": 2.62, "alturaTotal": 2.97, "volumen_m3": 1000, "alarmaLlenado": 2.0, "alarmaVacio": 1.2 },
   { "aliases": ["tanque belen", "belen", "belén"], "displayName": "Belén", "areaTanque": 787.045, "alturaRebose": 3.81, "alturaTotal": 4.2, "volumen_m3": 3000, "alarmaLlenado": 3.3, "alarmaVacio": 1.5 },
   { "aliases": ["tanque la aurora antiguo", "la aurora antiguo", "la aurora (antiguo)"], "displayName": "La Aurora Antiguo", "areaTanque": 373.329, "alturaRebose": 4.9, "alturaTotal": 5.1, "volumen_m3": 1500 },
-  { "aliases": ["calucaima", "calucaima", "caluc aima", "tanque calucaima", "tanque caluc aima"], "displayName": "Calucaima", "alturaRebose": 5.02, "alturaTotal": 5.5 },
-  { "aliases": ["miramar", "tanque miramar"], "displayName": "Miramar", "alturaRebose": 7.56, "alturaTotal": 8.0 },
+  { "aliases": ["calucaima", "calucaima", "caluc aima", "tanque calucaima", "tanque caluc aima"], "displayName": "Calucaima", "alturaRebose": 6.0, "alturaTotal": 6.0 },
+  { "aliases": ["miramar", "tanque miramar"], "displayName": "Miramar", "alturaRebose": 6.0, "alturaTotal": 6.0 },
   { "aliases": ["tanque la 30", "la 30"], "displayName": "La 30", "areaTanque": 299.7672, "alturaRebose": 6.85, "alturaTotal": 7.0, "volumen_m3": 6100, "alarmaLlenado": 6.3, "alarmaVacio": 1.5 },
   { "aliases": ["tanque la 29", "la 29"], "displayName": "La 29", "areaTanque": 1476, "alturaRebose": 3.01, "alturaTotal": 3.96, "volumen_m3": 6100, "alarmaLlenado": 3.1, "alarmaVacio": 1.5 },
   { "aliases": ["tanque cerrogordo 1", "cerrogordo 1", "cerro gordo 1"], "displayName": "Cerro Gordo 1", "areaTanque": 271.44, "alturaRebose": 4.02, "alturaTotal": 4.52, "volumen_m3": 1000, "alarmaLlenado": 3.56, "alarmaVacio": 2 },
@@ -22,6 +22,6 @@
   { "aliases": ["tanque piedra pintada 2", "piedra pintada 2", "piedrapintada 2"], "displayName": "Piedra Pintada 2", "areaTanque": 275.301, "alturaRebose": 4.92, "alturaTotal": 5.0, "volumen_m3": 1000 },
   { "aliases": ["tanque cerrogordo 3", "cerrogordo 3", "cerro gordo 3"], "displayName": "Cerro Gordo 3", "areaTanque": 29.16, "alturaRebose": 1.75, "alturaTotal": 2.0, "volumen_m3": 29.16 },
   { "aliases": ["tanque la aurora nuevo", "la aurora nuevo", "la aurora (nuevo)", "aurora", "la aurora"], "displayName": "La Aurora", "areaTanque": 449.4054, "alturaRebose": 3.97, "alturaTotal": 4.5, "volumen_m3": 1800 },
-  { "aliases": ["tanque zona industrial", "zona industrial"], "displayName": "Zona Industrial", "areaTanque": 660.93, "alturaRebose": 17.60, "alturaTotal": 18.0, "volumen_m3": 10627.49 },
+  { "aliases": ["tanque zona industrial", "zona industrial"], "displayName": "Zona Industrial", "areaTanque": 660.93, "alturaRebose": 6.0, "alturaTotal": 16.29, "volumen_m3": 10627.49 },
   { "aliases": ["tanque sur", "sur", "tanque sur"], "displayName": "Sur", "areaTanque": 286.491, "alturaRebose": 6.56, "alturaTotal": 7.11, "volumen_m3": 2036.95101 }
 ]

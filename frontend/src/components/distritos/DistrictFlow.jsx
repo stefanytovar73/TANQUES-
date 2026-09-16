@@ -1224,6 +1224,215 @@ function scoreOrthogonalRoute(points, obstacles) {
   return (collisions * 100000) + length + (Math.max(0, points.length - 2) * 8);
 }
 
+const SMART_ROUTE_CLEARANCE = 18;
+const SMART_ROUTE_TURN_PENALTY = 22;
+
+function inflateRoutingRect(rect, clearance = SMART_ROUTE_CLEARANCE) {
+  return {
+    ...rect,
+    left: Number(rect.left) - clearance,
+    right: Number(rect.right) + clearance,
+    top: Number(rect.top) - clearance,
+    bottom: Number(rect.bottom) + clearance,
+  };
+}
+
+function pointInsideRoutingRect(point, rect) {
+  return point.x > rect.left && point.x < rect.right && point.y > rect.top && point.y < rect.bottom;
+}
+
+function segmentCrossesRoutingRect(a, b, rect) {
+  if (a.x === b.x) {
+    return a.x > rect.left && a.x < rect.right &&
+      Math.max(a.y, b.y) > rect.top && Math.min(a.y, b.y) < rect.bottom;
+  }
+  if (a.y === b.y) {
+    return a.y > rect.top && a.y < rect.bottom &&
+      Math.max(a.x, b.x) > rect.left && Math.min(a.x, b.x) < rect.right;
+  }
+  return true;
+}
+
+function segmentIsRoutingClear(a, b, rects = []) {
+  if (a.x !== b.x && a.y !== b.y) return false;
+  return !rects.some((rect) => segmentCrossesRoutingRect(a, b, rect));
+}
+
+function uniqueSortedRoutingValues(values = []) {
+  const seen = new Map();
+  for (const value of values) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) continue;
+    const key = n.toFixed(3);
+    if (!seen.has(key)) seen.set(key, n);
+  }
+  return Array.from(seen.values()).sort((a, b) => a - b);
+}
+
+function routeHeapPush(heap, item) {
+  heap.push(item);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (heap[parent].priority <= heap[index].priority) break;
+    [heap[parent], heap[index]] = [heap[index], heap[parent]];
+    index = parent;
+  }
+}
+
+function routeHeapPop(heap) {
+  if (!heap.length) return null;
+  const first = heap[0];
+  const last = heap.pop();
+  if (heap.length && last) {
+    heap[0] = last;
+    let index = 0;
+    while (true) {
+      const left = (index * 2) + 1;
+      const right = left + 1;
+      let smallest = index;
+      if (left < heap.length && heap[left].priority < heap[smallest].priority) smallest = left;
+      if (right < heap.length && heap[right].priority < heap[smallest].priority) smallest = right;
+      if (smallest === index) break;
+      [heap[index], heap[smallest]] = [heap[smallest], heap[index]];
+      index = smallest;
+    }
+  }
+  return first;
+}
+
+function findObstacleFreeOrthogonalRoute(start, end, obstacleRects = [], laneOffset = 0) {
+  if (!start || !end) return null;
+
+  const corridorMargin = 220;
+  const corridor = {
+    left: Math.min(start.x, end.x) - corridorMargin,
+    right: Math.max(start.x, end.x) + corridorMargin,
+    top: Math.min(start.y, end.y) - corridorMargin,
+    bottom: Math.max(start.y, end.y) + corridorMargin,
+  };
+
+  const nearby = (obstacleRects || [])
+    .map((rect) => inflateRoutingRect(rect))
+    .filter((rect) =>
+      rect.right >= corridor.left &&
+      rect.left <= corridor.right &&
+      rect.bottom >= corridor.top &&
+      rect.top <= corridor.bottom &&
+      !pointInsideRoutingRect(start, rect) &&
+      !pointInsideRoutingRect(end, rect)
+    );
+
+  const xValues = [start.x, end.x];
+  const yValues = [start.y, end.y];
+  for (const rect of nearby) {
+    xValues.push(rect.left, rect.right);
+    yValues.push(rect.top, rect.bottom);
+  }
+
+  const minX = Math.min(start.x, end.x, ...nearby.map((r) => r.left));
+  const maxX = Math.max(start.x, end.x, ...nearby.map((r) => r.right));
+  const minY = Math.min(start.y, end.y, ...nearby.map((r) => r.top));
+  const maxY = Math.max(start.y, end.y, ...nearby.map((r) => r.bottom));
+  const escape = 34 + Math.abs(laneOffset);
+  xValues.push(minX - escape, maxX + escape);
+  yValues.push(minY - escape, maxY + escape);
+
+  const xs = uniqueSortedRoutingValues(xValues);
+  const ys = uniqueSortedRoutingValues(yValues);
+  if (!xs.length || !ys.length) return null;
+
+  const xIndex = new Map(xs.map((value, index) => [value.toFixed(3), index]));
+  const yIndex = new Map(ys.map((value, index) => [value.toFixed(3), index]));
+  const startXi = xIndex.get(Number(start.x).toFixed(3));
+  const startYi = yIndex.get(Number(start.y).toFixed(3));
+  const endXi = xIndex.get(Number(end.x).toFixed(3));
+  const endYi = yIndex.get(Number(end.y).toFixed(3));
+  if ([startXi, startYi, endXi, endYi].some((value) => value == null)) return null;
+
+  const pointAt = (xi, yi) => ({ x: xs[xi], y: ys[yi] });
+  const stateKey = (xi, yi, dir) => `${xi}:${yi}:${dir}`;
+  const heuristic = (xi, yi) => Math.abs(xs[xi] - end.x) + Math.abs(ys[yi] - end.y);
+  const desiredMidX = ((start.x + end.x) / 2) + laneOffset;
+  const desiredMidY = ((start.y + end.y) / 2) + laneOffset;
+
+  const open = [];
+  const distances = new Map();
+  const parents = new Map();
+  const startKey = stateKey(startXi, startYi, 'n');
+  distances.set(startKey, 0);
+  routeHeapPush(open, { xi: startXi, yi: startYi, dir: 'n', key: startKey, priority: heuristic(startXi, startYi) });
+
+  let finalState = null;
+  let guard = 0;
+  const guardMax = Math.max(800, xs.length * ys.length * 3);
+
+  while (open.length && guard < guardMax) {
+    guard += 1;
+    const current = routeHeapPop(open);
+    if (!current) break;
+
+    if (current.xi === endXi && current.yi === endYi) {
+      finalState = current;
+      break;
+    }
+
+    const currentDistance = distances.get(current.key);
+    if (!Number.isFinite(currentDistance)) continue;
+
+    const neighbors = [
+      [current.xi - 1, current.yi, 'h'],
+      [current.xi + 1, current.yi, 'h'],
+      [current.xi, current.yi - 1, 'v'],
+      [current.xi, current.yi + 1, 'v'],
+    ];
+
+    for (const [nxi, nyi, nextDir] of neighbors) {
+      if (nxi < 0 || nyi < 0 || nxi >= xs.length || nyi >= ys.length) continue;
+
+      const a = pointAt(current.xi, current.yi);
+      const b = pointAt(nxi, nyi);
+      if (nearby.some((rect) => pointInsideRoutingRect(b, rect))) continue;
+      if (!segmentIsRoutingClear(a, b, nearby)) continue;
+
+      const lengthCost = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+      const turnCost = current.dir !== 'n' && current.dir !== nextDir ? SMART_ROUTE_TURN_PENALTY : 0;
+      const laneBias = nextDir === 'h'
+        ? Math.abs(b.y - desiredMidY) * 0.003
+        : Math.abs(b.x - desiredMidX) * 0.003;
+      const nextDistance = currentDistance + lengthCost + turnCost + laneBias;
+      const nextKey = stateKey(nxi, nyi, nextDir);
+
+      if (nextDistance >= (distances.get(nextKey) ?? Number.POSITIVE_INFINITY)) continue;
+
+      distances.set(nextKey, nextDistance);
+      parents.set(nextKey, current.key);
+      routeHeapPush(open, {
+        xi: nxi,
+        yi: nyi,
+        dir: nextDir,
+        key: nextKey,
+        priority: nextDistance + heuristic(nxi, nyi),
+      });
+    }
+  }
+
+  if (!finalState) return null;
+
+  const states = [];
+  let key = finalState.key;
+  while (key) {
+    const [xiRaw, yiRaw, dir] = key.split(':');
+    const xi = Number(xiRaw);
+    const yi = Number(yiRaw);
+    states.push({ xi, yi, dir });
+    key = parents.get(key) || null;
+  }
+  states.reverse();
+
+  return compactOrthogonalPoints(states.map((state) => pointAt(state.xi, state.yi)));
+}
+
 function buildRoundedOrthogonalPath(points = [], radius = 7) {
   const p = compactOrthogonalPoints(points);
   if (!p.length) return '';
@@ -1279,79 +1488,52 @@ function SmartDistrictEdge(props) {
   const tx = Number(targetX);
   const ty = Number(targetY);
 
-  // Solo considerar obstáculos cercanos al trayecto origen-destino. Así una
-  // planta lejana no obliga a una conexión a rodear todo el diagrama.
-  const corridorMargin = 150;
-  const corridorLeft = Math.min(sx, tx) - corridorMargin;
-  const corridorRight = Math.max(sx, tx) + corridorMargin;
-  const corridorTop = Math.min(sy, ty) - corridorMargin;
-  const corridorBottom = Math.max(sy, ty) + corridorMargin;
-  const obstacleRects = allObstacleRects.filter((rect) =>
-    rect.right >= corridorLeft &&
-    rect.left <= corridorRight &&
-    rect.bottom >= corridorTop &&
-    rect.top <= corridorBottom
-  );
-
   const sourceVector = getPositionVector(sourcePosition, tx - sx, ty - sy);
   const targetVector = getPositionVector(targetPosition, sx - tx, sy - ty);
-  const stubDistance = 24 + Math.min(22, Math.abs(laneOffset));
+  const stubDistance = 26 + Math.min(20, Math.abs(laneOffset));
   const sourceStub = { x: sx + (sourceVector.x * stubDistance), y: sy + (sourceVector.y * stubDistance) };
   const targetStub = { x: tx + (targetVector.x * stubDistance), y: ty + (targetVector.y * stubDistance) };
 
-  const allRects = obstacleRects.length ? obstacleRects : [{ left: Math.min(sx, tx), right: Math.max(sx, tx), top: Math.min(sy, ty), bottom: Math.max(sy, ty) }];
-  const minLeft = Math.min(sx, tx, ...allRects.map((r) => r.left));
-  const maxRight = Math.max(sx, tx, ...allRects.map((r) => r.right));
-  const minTop = Math.min(sy, ty, ...allRects.map((r) => r.top));
-  const maxBottom = Math.max(sy, ty, ...allRects.map((r) => r.bottom));
-  const midX = ((sourceStub.x + targetStub.x) / 2) + laneOffset;
-  const midY = ((sourceStub.y + targetStub.y) / 2) + laneOffset;
-  const outerGap = 30 + Math.abs(laneOffset);
+  // El tramo central se calcula sobre una malla ortogonal construida con los
+  // bordes reales de los nodos. Así una línea Auto no puede atravesar filtros,
+  // salidas, plantas, tanques ni otros recuadros intermedios.
+  const routedMiddle = findObstacleFreeOrthogonalRoute(sourceStub, targetStub, allObstacleRects, laneOffset);
 
-  const candidates = [
-    [
-      { x: sx, y: sy }, sourceStub,
-      { x: midX, y: sourceStub.y },
-      { x: midX, y: targetStub.y },
-      targetStub, { x: tx, y: ty },
-    ],
-    [
-      { x: sx, y: sy }, sourceStub,
-      { x: sourceStub.x, y: midY },
-      { x: targetStub.x, y: midY },
-      targetStub, { x: tx, y: ty },
-    ],
-    [
-      { x: sx, y: sy }, sourceStub,
-      { x: sourceStub.x, y: minTop - outerGap },
-      { x: targetStub.x, y: minTop - outerGap },
-      targetStub, { x: tx, y: ty },
-    ],
-    [
-      { x: sx, y: sy }, sourceStub,
-      { x: sourceStub.x, y: maxBottom + outerGap },
-      { x: targetStub.x, y: maxBottom + outerGap },
-      targetStub, { x: tx, y: ty },
-    ],
-    [
-      { x: sx, y: sy }, sourceStub,
-      { x: minLeft - outerGap, y: sourceStub.y },
-      { x: minLeft - outerGap, y: targetStub.y },
-      targetStub, { x: tx, y: ty },
-    ],
-    [
-      { x: sx, y: sy }, sourceStub,
-      { x: maxRight + outerGap, y: sourceStub.y },
-      { x: maxRight + outerGap, y: targetStub.y },
-      targetStub, { x: tx, y: ty },
-    ],
-  ].map(compactOrthogonalPoints);
+  let routedPoints = routedMiddle
+    ? [{ x: sx, y: sy }, sourceStub, ...routedMiddle, targetStub, { x: tx, y: ty }]
+    : null;
 
-  const best = candidates
-    .map((points) => ({ points, score: scoreOrthogonalRoute(points, obstacleRects) }))
-    .sort((a, b) => a.score - b.score)[0]?.points || candidates[0];
+  // Fallback conservador: si por alguna geometría extrema no se encuentra ruta
+  // en la malla, elegir entre rodear por arriba/abajo/izquierda/derecha y penalizar
+  // fuertemente cualquier cruce con nodos.
+  if (!routedPoints) {
+    const inflated = allObstacleRects.map((rect) => inflateRoutingRect(rect));
+    const allRects = inflated.length
+      ? inflated
+      : [{ left: Math.min(sx, tx), right: Math.max(sx, tx), top: Math.min(sy, ty), bottom: Math.max(sy, ty) }];
+    const minLeft = Math.min(sx, tx, ...allRects.map((r) => r.left));
+    const maxRight = Math.max(sx, tx, ...allRects.map((r) => r.right));
+    const minTop = Math.min(sy, ty, ...allRects.map((r) => r.top));
+    const maxBottom = Math.max(sy, ty, ...allRects.map((r) => r.bottom));
+    const midX = ((sourceStub.x + targetStub.x) / 2) + laneOffset;
+    const midY = ((sourceStub.y + targetStub.y) / 2) + laneOffset;
+    const outerGap = 34 + Math.abs(laneOffset);
 
-  const path = buildRoundedOrthogonalPath(best);
+    const candidates = [
+      [{ x: sx, y: sy }, sourceStub, { x: midX, y: sourceStub.y }, { x: midX, y: targetStub.y }, targetStub, { x: tx, y: ty }],
+      [{ x: sx, y: sy }, sourceStub, { x: sourceStub.x, y: midY }, { x: targetStub.x, y: midY }, targetStub, { x: tx, y: ty }],
+      [{ x: sx, y: sy }, sourceStub, { x: sourceStub.x, y: minTop - outerGap }, { x: targetStub.x, y: minTop - outerGap }, targetStub, { x: tx, y: ty }],
+      [{ x: sx, y: sy }, sourceStub, { x: sourceStub.x, y: maxBottom + outerGap }, { x: targetStub.x, y: maxBottom + outerGap }, targetStub, { x: tx, y: ty }],
+      [{ x: sx, y: sy }, sourceStub, { x: minLeft - outerGap, y: sourceStub.y }, { x: minLeft - outerGap, y: targetStub.y }, targetStub, { x: tx, y: ty }],
+      [{ x: sx, y: sy }, sourceStub, { x: maxRight + outerGap, y: sourceStub.y }, { x: maxRight + outerGap, y: targetStub.y }, targetStub, { x: tx, y: ty }],
+    ].map(compactOrthogonalPoints);
+
+    routedPoints = candidates
+      .map((points) => ({ points, score: scoreOrthogonalRoute(points, allObstacleRects) }))
+      .sort((a, b) => a.score - b.score)[0]?.points || candidates[0];
+  }
+
+  const path = buildRoundedOrthogonalPath(compactOrthogonalPoints(routedPoints));
   const visibleStyle = {
     ...(style || {}),
     fill: 'none',

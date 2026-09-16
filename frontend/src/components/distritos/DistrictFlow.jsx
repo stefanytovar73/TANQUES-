@@ -1056,7 +1056,6 @@ function formatDateLabel(isoDate, fmt = 'dd/MM/yyyy') {
 const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [], initialEdges = [], onNodeSelect, onEdgeSelect, editMode = false, mode = 'select', deleteMode = false, containerRef = null, focusNodeId = null, filterState = 'all', apiError = false, edgeLineType, diagramModeExternal, onDiagramModeChange, onDirtyChanged }, ref) {
 
   // Note: avoid updateNodeDimensions to prevent React Flow from hiding nodes while measuring
-  try { console.debug('[DISTRICT DEBUG] DistrictFlow init props initialNodes.length:', (initialNodes || []).length, 'initialEdges.length:', (initialEdges || []).length); } catch (e) {}
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [rfInstance, setRfInstance] = useState(null);
@@ -2867,7 +2866,6 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         return;
       }
 
-      try { console.debug('[DISTRICT DEBUG] initialNodes received:', freshApiNodes.length); } catch (e) {}
       const sourceNodes = freshApiNodes.length ? freshApiNodes : STATIC_NODES.map(s => {
         if (s.type === 'plant' || s.type === 'district') return { id: s.id, type: s.type, label: s.label, position: s.position, data: { display_name: s.label } };
         return { id: s.id, type: 'tank', label: s.label, position: s.position, data: { display_name: s.label, __placeholder: true } };

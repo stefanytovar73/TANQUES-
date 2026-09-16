@@ -1231,7 +1231,7 @@ function SmartDistrictEdge(props) {
   } = props;
 
   const internals = Array.from(nodeInternals?.values?.() || []);
-  const obstacleRects = internals
+  const allObstacleRects = internals
     .filter((node) => String(node?.id) !== String(source) && String(node?.id) !== String(target))
     .map(getRoutingNodeBox)
     .filter((box) => box.shapeType !== 'line');
@@ -1247,6 +1247,21 @@ function SmartDistrictEdge(props) {
   const sy = Number(sourceY);
   const tx = Number(targetX);
   const ty = Number(targetY);
+
+  // Solo considerar obstáculos cercanos al trayecto origen-destino. Así una
+  // planta lejana no obliga a una conexión a rodear todo el diagrama.
+  const corridorMargin = 150;
+  const corridorLeft = Math.min(sx, tx) - corridorMargin;
+  const corridorRight = Math.max(sx, tx) + corridorMargin;
+  const corridorTop = Math.min(sy, ty) - corridorMargin;
+  const corridorBottom = Math.max(sy, ty) + corridorMargin;
+  const obstacleRects = allObstacleRects.filter((rect) =>
+    rect.right >= corridorLeft &&
+    rect.left <= corridorRight &&
+    rect.bottom >= corridorTop &&
+    rect.top <= corridorBottom
+  );
+
   const sourceVector = getPositionVector(sourcePosition, tx - sx, ty - sy);
   const targetVector = getPositionVector(targetPosition, sx - tx, sy - ty);
   const stubDistance = 24 + Math.min(22, Math.abs(laneOffset));

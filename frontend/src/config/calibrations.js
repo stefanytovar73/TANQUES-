@@ -9,7 +9,7 @@ const ALTURAS_REBOSE_CALIBRADAS = {
   // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
   // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
   // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
-  "Calucaima": 5.0243902439,
+  "Calucaima": 6.0,
   // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
   // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
   // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
@@ -32,8 +32,8 @@ const ALTURAS_REBOSE_CALIBRADAS = {
   // Ajuste provisional del 2026-08-20: se corrigió esta altura_rebose_calibrada por discrepancia con IBAL.
   // Se calculó con un solo punto de referencia (nivel_sensor + % IBAL en ese instante), no es medición física en campo.
   // Debe revisarse/reconfirmarse en unos días comparando de nuevo contra IBAL para verificar si el % se mantiene alineado o vuelve a desviarse.
-  "Miramar": 7.46875,
-  "Zona Industrial": 16.77777777777778,
+  "Miramar": 6.0,
+  "Zona Industrial": 6.0,
   "Picaleña 1": 4.364,
   "Picaleña 2": 5.696,
 };

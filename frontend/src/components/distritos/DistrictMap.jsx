@@ -41,8 +41,6 @@ const COLOR_PRESETS = [
 
 export default function DistrictMap() {
   const { tanques, loading, error } = useTanques();
-  try { console.debug('[DISTRICT DEBUG] useTanques returned:', Array.isArray(tanques) ? tanques.length : typeof tanques); } catch (e) {}
-  try { console.debug('[DISTRICT DEBUG] STATIC_NODES count:', Array.isArray(STATIC_NODES) ? STATIC_NODES.length : typeof STATIC_NODES); } catch (e) {}
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -769,7 +767,6 @@ export default function DistrictMap() {
           ) : null}
           {/* Ensure we always pass at least the STATIC_NODES as fallback so the map shows even if API data is missing */}
           {(() => {
-            try { console.debug('[DISTRICT DEBUG] Passing nodesTo DistrictFlow count:', flowNodes.length, flowNodes.map(n => n.id)); } catch (e) {}
             return <DistrictFlow ref={flowRef} initialNodes={flowNodes} initialEdges={resolvedConnections} apiError={Boolean(error)} onNodeSelect={(id) => { setSelectedId(id); setSelectedEdgeId(null); }} onEdgeSelect={(id) => { setSelectedEdgeId(id); }} editMode={editMode} mode={editTool} deleteMode={deleteMode} containerRef={containerRef} focusNodeId={selectedId} filterState={filterState} edgeLineType={edgeLineType} diagramModeExternal={diagramMode} onDiagramModeChange={setDiagramMode} onDirtyChanged={(v) => { try { setUnsavedChanges(!!v); } catch (e) {} }} />;
           })()}
           {tooltip ? (

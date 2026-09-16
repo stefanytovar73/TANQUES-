@@ -170,9 +170,16 @@ function textMatchesComparableAlias(sourceValue, targetValue) {
 
 function getStableRuntimeShapeName(nodeData = {}) {
   const safeNodeData = nodeData && typeof nodeData === 'object' ? nodeData : {};
+  const custom = [safeNodeData.customName, safeNodeData.diagramName]
+    .filter((value) => value != null && String(value).trim())
+    .map((value) => String(value).trim())
+    .find(Boolean);
+  if (custom) return custom;
+
   const rawNodeId = String(safeNodeData.id || '').trim();
   if (rawNodeId && STABLE_SHAPE_NAME_BY_ID[rawNodeId]) return STABLE_SHAPE_NAME_BY_ID[rawNodeId];
-  const fallback = [safeNodeData.customName, safeNodeData.label, safeNodeData.display_name, safeNodeData.nombre, safeNodeData.apiName, safeNodeData.originalName]
+
+  const fallback = [safeNodeData.label, safeNodeData.display_name, safeNodeData.nombre, safeNodeData.apiName, safeNodeData.originalName]
     .filter((value) => value != null && String(value).trim())
     .map((value) => String(value).trim())
     .find(Boolean);
@@ -358,7 +365,7 @@ async function _loadPtapMetrics() {
     const cached = tanqueService.peekPtap?.();
     if (cached) {
       const cachedMap = {};
-      for (const variable of (cached?.variables || [])) {
+      for (const variable of extractMetricVariables(cached)) {
         if (variable?.tag) cachedMap[variable.tag] = variable;
       }
       if (Object.keys(cachedMap).length) _notifyPtapMetrics(cachedMap);
@@ -369,7 +376,7 @@ async function _loadPtapMetrics() {
   _ptapMetricsLoading = tanqueService.getPtap()
     .then((res) => {
       const map = {};
-      for (const variable of (res?.variables || [])) {
+      for (const variable of extractMetricVariables(res)) {
         if (variable?.tag) map[variable.tag] = variable;
       }
       _notifyPtapMetrics(map);
@@ -385,6 +392,27 @@ function _ensurePtapMetricsPolling() {
   _ptapMetricsPollingStarted = true;
   _loadPtapMetrics();
   setInterval(_loadPtapMetrics, 60000);
+}
+
+function extractMetricVariables(response) {
+  if (!response || typeof response !== 'object') return [];
+  if (Array.isArray(response)) return response;
+
+  const candidates = [
+    response.variables,
+    response.ptap,
+    response.captacion,
+    response.data?.variables,
+    response.data?.ptap,
+    response.data?.captacion,
+    Array.isArray(response.data) ? response.data : null,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+
+  return [];
 }
 
 function parseMetricNumber(value) {
@@ -741,7 +769,7 @@ function getMetricConfigForNodeId(nodeId, nodeData = {}) {
 }
 
 function findFlowMetricVariable(response, config = {}) {
-  const variables = Array.isArray(response?.variables) ? response.variables : [];
+  const variables = extractMetricVariables(response);
   if (!variables.length) return null;
 
   const candidateTags = [
@@ -779,13 +807,16 @@ function findFlowMetricVariable(response, config = {}) {
 }
 
 function formatFlowMetricVariable(variable, fallbackUnit = 'L/s') {
-  if (!variable || variable.valor == null || variable.valor === '') return null;
+  if (!variable) return null;
 
-  const rawValue = parseMetricNumber(variable.valor);
-  const unit = variable.unidad || fallbackUnit;
+  const raw = variable.valor ?? variable.value ?? variable.valor_m ?? variable.lectura ?? variable.capacidad ?? variable.capacidad_m3 ?? variable.caudal ?? variable.reading ?? null;
+  if (raw === null || raw === undefined || raw === '') return null;
+
+  const rawValue = parseMetricNumber(raw);
+  const unit = variable.unidad || variable.unit || fallbackUnit;
 
   if (rawValue == null) {
-    const cleaned = String(variable.valor).trim();
+    const cleaned = String(raw).trim();
     return cleaned ? `${cleaned} ${unit}`.trim() : null;
   }
 
@@ -1092,6 +1123,14 @@ const AUTO_HANDLE_STYLE = {
   pointerEvents: 'none',
   zIndex: 0,
 };
+
+function rotateCardinalPosition(position, angleDeg = 0) {
+  const normalized = ((Number(angleDeg) || 0) % 360 + 360) % 360;
+  const steps = ((Math.round(normalized / 90) % 4) + 4) % 4;
+  const order = [Position.Top, Position.Right, Position.Bottom, Position.Left];
+  const index = order.indexOf(position);
+  return index >= 0 ? order[(index + steps) % 4] : position;
+}
 
 function AutoInvisibleHandles({ left = 0, right = 120, top = 0, bottom = 68 }) {
   const width = Math.max(1, Number(right) - Number(left));
@@ -1705,18 +1744,18 @@ function FlowTankNode(props) {
   const bottomRightHandle = rotatePoint(innerOffsetX + 92 * tankScale, innerOffsetY + 114 * tankScale, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: tankWidth, height: tankHeight, position: 'relative', cursor: 'pointer' }}>
       {/* Handles — solo visibles en editMode */}
-      <Handle type="target" position={Position.Left}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
-      <Handle type="source" position={Position.Right}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
-      <Handle type="target" position={Position.Top}    id="t-top"    style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
-      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)}   id="t-left"   style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)}  id="s-right"  style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, rotation)}    id="t-top"    style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, rotation)} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
 
       {/* Cuatro puntos extra, alternados en las esquinas del tanque. */}
-      <Handle type="target" position={Position.Left} id="t-top-left" style={{ ...handleStyle, left: topLeftHandle.left, top: topLeftHandle.top }} />
-      <Handle type="source" position={Position.Right} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
-      <Handle type="source" position={Position.Left} id="s-bottom-left" style={{ ...handleStyle, left: bottomLeftHandle.left, top: bottomLeftHandle.top }} />
-      <Handle type="target" position={Position.Right} id="t-bottom-right" style={{ ...handleStyle, left: bottomRightHandle.left, top: bottomRightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)} id="t-top-left" style={{ ...handleStyle, left: topLeftHandle.left, top: topLeftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)} id="s-top-right" style={{ ...handleStyle, left: topRightHandle.left, top: topRightHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Left, rotation)} id="s-bottom-left" style={{ ...handleStyle, left: bottomLeftHandle.left, top: bottomLeftHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Right, rotation)} id="t-bottom-right" style={{ ...handleStyle, left: bottomRightHandle.left, top: bottomRightHandle.top }} />
       <AutoInvisibleHandles
         left={innerOffsetX + 20 * tankScale}
         right={innerOffsetX + 100 * tankScale}
@@ -1840,11 +1879,14 @@ function FlowPlantNode(props) {
 
   useEffect(() => {
     let mounted = true;
+    let timer = null;
 
-    const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {});
-    if (cachedLabel != null) setMetricLabel(cachedLabel);
+    const refreshMetric = async () => {
+      const cachedLabel = getCachedFlowMetricForNodeId(metricNodeId, nodeData || data || {});
+      if (mounted && cachedLabel !== null && cachedLabel !== undefined && cachedLabel !== '') {
+        setMetricLabel(cachedLabel);
+      }
 
-    (async () => {
       try {
         if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId, nodeData || data || {})) {
           if (mounted) setMetricLabel(null);
@@ -1852,13 +1894,18 @@ function FlowPlantNode(props) {
         }
 
         const label = await loadFlowMetricForNodeId(metricNodeId, nodeData || data || {});
-        if (mounted && label != null) setMetricLabel(label);
+        if (mounted && label !== null && label !== undefined && label !== '') setMetricLabel(label);
       } catch (error) {
         // Conservar el último dato visible si el refresco falla.
       }
-    })();
+    };
 
-    return () => { mounted = false; };
+    refreshMetric();
+    timer = setInterval(refreshMetric, 30000);
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
   }, [metricNodeId]);
 
   const saveLabel = () => {
@@ -1896,11 +1943,32 @@ function FlowPlantNode(props) {
   const bottomHandle = rotatePoint(cx, h - 14, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer' }}>
-      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
-      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
-      <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
-      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: 200, height: 80, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
+      {metricLabel !== null && metricLabel !== undefined && metricLabel !== '' ? (
+        <div style={{
+          position: 'absolute',
+          left: '50%',
+          top: -28,
+          transform: 'translateX(-50%)',
+          background: '#fff',
+          border: '1px solid #94a3b8',
+          borderRadius: 6,
+          padding: '3px 7px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.18)',
+          whiteSpace: 'nowrap',
+          fontSize: 11,
+          fontWeight: 900,
+          color: '#0b2447',
+          zIndex: 30,
+          pointerEvents: 'none',
+        }}>
+          {metricLabel}
+        </div>
+      ) : null}
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, rotation)} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, rotation)} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
       <AutoInvisibleHandles left={6} right={w - 6} top={14} bottom={h - 14} />
 
       <div style={{ width: 200, height: 80, overflow: 'visible' }}>
@@ -1971,26 +2039,6 @@ function FlowPlantNode(props) {
               </foreignObject>
             ) : (
               <>
-                {metricLabel ? (
-                  <div style={{
-                    position: 'absolute',
-                    left: '50%',
-                    top: -14,
-                    transform: 'translateX(-50%)',
-                    background: '#fff',
-                    border: '1px solid #94a3b8',
-                    borderRadius: 6,
-                    padding: '4px 8px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.18)',
-                    whiteSpace: 'nowrap',
-                    fontSize: 11,
-                    fontWeight: 900,
-                    color: '#0b2447',
-                    zIndex: 20,
-                  }}>
-                    {metricLabel}
-                  </div>
-                ) : null}
                 <rect x={-90} y={-22} width={180} height={44} rx={22} ry={22} fill={isPending ? '#fee2e2' : (customColor ? `${customColor}22` : '#e6f2ff')} stroke={isPending ? '#ef4444' : (customColor || '#073B70')} strokeWidth={isPending || data?.selected ? 3 : 2} />
                 <text x={0} y={6} fontFamily="Roboto, Arial" fontSize={13} fontWeight={800} fill={isPending ? '#b91c1c' : (customColor || '#073B70')} textAnchor="middle" style={{ cursor: 'pointer' }}>{labelText}</text>
               </>
@@ -2076,11 +2124,11 @@ function FlowDistrictNode(props) {
   const bottomHandle = rotatePoint(cx, h - 4, rotation);
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
-      <Handle type="target" position={Position.Left} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
-      <Handle type="source" position={Position.Right} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
-      <Handle type="target" position={Position.Top} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
-      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width: 160, height: 48, position: 'relative', cursor: 'pointer' }}>
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, rotation)} id="t-left" style={{ ...handleStyle, left: leftHandle.left, top: leftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, rotation)} id="s-right" style={{ ...handleStyle, left: rightHandle.left, top: rightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, rotation)} id="t-top" style={{ ...handleStyle, left: topHandle.left, top: topHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, rotation)} id="s-bottom" style={{ ...handleStyle, left: bottomHandle.left, top: bottomHandle.top }} />
       <AutoInvisibleHandles left={6} right={w - 6} top={4} bottom={h - 4} />
 
       <div style={{ width: 160, height: 48, overflow: 'visible' }}>
@@ -2183,10 +2231,35 @@ function FlowShapeNode(props) {
     setDraft(runtimeDisplayName);
   }, [runtimeDisplayName]);
 
-  const cachedMetricText = getCachedFlowMetricForNodeId(runtimeNodeData?.id ?? data?.id, runtimeNodeData || data || {});
+  const metricNodeId = runtimeNodeData?.id ?? data?.id;
+  const [liveMetricText, setLiveMetricText] = useState(() => getCachedFlowMetricForNodeId(metricNodeId, runtimeNodeData || data || {}));
+
+  useEffect(() => {
+    let mounted = true;
+    let timer = null;
+
+    const refreshMetric = async () => {
+      const cached = getCachedFlowMetricForNodeId(metricNodeId, runtimeNodeData || data || {});
+      if (mounted && cached !== null && cached !== undefined && cached !== '') setLiveMetricText(cached);
+
+      try {
+        if (!metricNodeId || !getMetricConfigForNodeId(metricNodeId, runtimeNodeData || data || {})) return;
+        const latest = await loadFlowMetricForNodeId(metricNodeId, runtimeNodeData || data || {});
+        if (mounted && latest !== null && latest !== undefined && latest !== '') setLiveMetricText(latest);
+      } catch (e) {}
+    };
+
+    refreshMetric();
+    timer = setInterval(refreshMetric, 30000);
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [metricNodeId]);
+
   const metricText = (runtimeNodeData && runtimeNodeData.ptapMetricText != null && runtimeNodeData.ptapMetricText !== '')
     ? String(runtimeNodeData.ptapMetricText)
-    : cachedMetricText;
+    : liveMetricText;
   const metricLabel = (runtimeNodeData && runtimeNodeData.ptapMetricLabel != null && runtimeNodeData.ptapMetricLabel !== '')
     ? String(runtimeNodeData.ptapMetricLabel)
     : null;
@@ -2196,8 +2269,8 @@ function FlowShapeNode(props) {
 
   // Respect zero as a valid API value while still suppressing null/undefined.
   const effectiveMetricText = (metricText !== null && metricText !== undefined && metricText !== '') ? String(metricText).trim() : null;
-  const shouldRenderMetricBadge = !isMackenflocShape && effectiveMetricText !== null;
-  const shouldRenderMackenflocInline = isMackenflocShape && effectiveMetricText !== null;
+  const shouldRenderMetricBadge = effectiveMetricText !== null;
+  const shouldRenderMackenflocInline = false;
 
   const handleClick = (ev) => {
     ev.stopPropagation();
@@ -2220,6 +2293,23 @@ function FlowShapeNode(props) {
   const isPending = Boolean(data && data.pendingConnect);
   const handleStyle = { width: 10, height: 10, background: safeColor, border: '2px solid #ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', borderRadius: '50%', zIndex: 10, opacity: editMode && mode === 'connect' ? 1 : 0, pointerEvents: editMode && mode === 'connect' ? 'auto' : 'none' };
   const btnStyle = { background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, padding: 0 };
+
+  const normalizedRotation = ((Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0) % 360 + 360) % 360;
+  const shapeCx = width / 2;
+  const shapeCy = height / 2;
+  const rotateShapePoint = (x, y) => {
+    const rad = normalizedRotation * Math.PI / 180;
+    const dx = x - shapeCx;
+    const dy = y - shapeCy;
+    return {
+      left: shapeCx + (dx * Math.cos(rad) - dy * Math.sin(rad)),
+      top: shapeCy + (dx * Math.sin(rad) + dy * Math.cos(rad)),
+    };
+  };
+  const shapeLeftHandle = rotateShapePoint(2, shapeCy);
+  const shapeRightHandle = rotateShapePoint(width - 2, shapeCy);
+  const shapeTopHandle = rotateShapePoint(shapeCx, 2);
+  const shapeBottomHandle = rotateShapePoint(shapeCx, height - 2);
 
   const renderShape = () => {
     const fill = `${safeColor}33`;
@@ -2273,30 +2363,38 @@ function FlowShapeNode(props) {
   };
 
   return (
-    <div onClick={handleClick} onDoubleClick={beginEdit} title="Doble clic para editar nombre" style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
-      <Handle type="target" position={Position.Left} id="t-left" style={handleStyle} />
-      <Handle type="source" position={Position.Right} id="s-right" style={handleStyle} />
-      <Handle type="target" position={Position.Top} id="t-top" style={handleStyle} />
-      <Handle type="source" position={Position.Bottom} id="s-bottom" style={handleStyle} />
+    <div onClick={handleClick} title="Doble clic para editar nombre" style={{ width, height, position: 'relative', cursor: 'pointer', overflow: 'visible' }}>
+      {shouldRenderMetricBadge ? (
+        <div style={{
+          position: 'absolute',
+          left: '50%',
+          top: -28,
+          transform: 'translateX(-50%)',
+          background: '#fff',
+          border: '1px solid #94a3b8',
+          borderRadius: 6,
+          padding: '3px 7px',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.14)',
+          fontSize: 11,
+          fontWeight: 900,
+          color: '#0b2447',
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+          zIndex: 30,
+        }}>
+          {effectiveMetricText}
+        </div>
+      ) : null}
+      <Handle type="target" position={rotateCardinalPosition(Position.Left, normalizedRotation)} id="t-left" style={{ ...handleStyle, left: shapeLeftHandle.left, top: shapeLeftHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Right, normalizedRotation)} id="s-right" style={{ ...handleStyle, left: shapeRightHandle.left, top: shapeRightHandle.top }} />
+      <Handle type="target" position={rotateCardinalPosition(Position.Top, normalizedRotation)} id="t-top" style={{ ...handleStyle, left: shapeTopHandle.left, top: shapeTopHandle.top }} />
+      <Handle type="source" position={rotateCardinalPosition(Position.Bottom, normalizedRotation)} id="s-bottom" style={{ ...handleStyle, left: shapeBottomHandle.left, top: shapeBottomHandle.top }} />
       <AutoInvisibleHandles left={2} right={width - 2} top={2} bottom={height - 2} />
       <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
         <g transform={`translate(${width / 2}, ${height / 2}) rotate(${Number(nodeData?.rotation ?? data?.rotation ?? 0) || 0}) translate(${-width / 2}, ${-height / 2})`}>
           {renderShape()}
           {(() => {
             try {
-              if (shouldRenderMetricBadge) {
-                const badgeText = effectiveMetricText || '';
-                const boxW = Math.min(120, Math.max(64, String(badgeText || '').length * 8));
-                const boxX = Math.max(2, Math.round((width - boxW) / 2));
-                return (
-                  <foreignObject x={boxX} y={-28} width={boxW} height={22} style={{ overflow: 'visible' }}>
-                    <div xmlns="http://www.w3.org/1999/xhtml" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '1px solid #94a3b8', borderRadius: 6, padding: '2px 6px', boxShadow: '0 2px 6px rgba(0,0,0,0.12)', fontSize: 11, fontWeight: 900, color: '#0b2447', whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-                      {badgeText}
-                    </div>
-                  </foreignObject>
-                );
-              }
-
               if (shouldRenderMackenflocInline) {
                 const titleY = Math.round(height / 2) - 4;
                 const valueY = Math.round(height / 2) + 12;
@@ -2310,10 +2408,10 @@ function FlowShapeNode(props) {
             } catch (e) {}
             return null;
           })()}
-          {!isEditing && shapeType !== 'line' && !isMackenflocShape ? (
+          {!isEditing && shapeType !== 'line' ? (
             <foreignObject x={0} y={0} width={width} height={height} style={{ overflow: 'visible' }}>
               <div xmlns="http://www.w3.org/1999/xhtml" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', wordBreak: 'break-word', color: '#0b2447', fontSize: 13, fontWeight: 700, padding: '4px 8px', boxSizing: 'border-box', pointerEvents: 'none', width: '100%', height: '100%' }}>
-                <div style={{ width: '100%', lineHeight: 1.2 }}>{shouldRenderMetricBadge ? (STABLE_SHAPE_NAME_BY_ID[String(nodeData?.id || '')] || draft) : draft}</div>
+                <div style={{ width: '100%', lineHeight: 1.2 }}>{draft}</div>
               </div>
             </foreignObject>
           ) : null}
@@ -5835,6 +5933,23 @@ const EdgesOcclusionMask = React.memo(function EdgesOcclusionMask({ nodes = [] }
           const nextId = node?.id || null;
           _setSelectedNodeId(nextId);
           if (onNodeSelect && nextId) onNodeSelect(nextId, node, { openDetails: false });
+        }}
+        onNodeDoubleClick={(event, node) => {
+          try {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+          } catch (e) {}
+
+          if (!node || mode === 'connect' || deleteMode) return;
+
+          const currentName = getNodeDisplayName(node);
+          const nextName = window.prompt('Nuevo nombre:', currentName || '');
+          if (nextName === null) return;
+
+          const clean = String(nextName).replace(/\s+/g, ' ').trim();
+          if (!clean || clean === currentName) return;
+
+          applyNodeRename(node.id, clean);
         }}
         onSelectionChange={({ nodes: selectedNodes = [] }) => {
           const shouldSuppress = dragMovedRef.current || suppressClickAfterDragRef.current || suppressSelectionAfterDragRef.current || Date.now() < dragSuppressUntilRef.current;

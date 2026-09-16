@@ -8,7 +8,7 @@ import { getStatusMeta } from '../../utils/statusUtils';
 import { NODES as STATIC_NODES, CONNECTIONS as STATIC_CONNECTIONS } from './districtLayout';
 // TankNode/PlantNode/DistrictNode/Connection rendered inside DistrictFlow
 // DistrictToolbar removed to hide built-in zoom controls (lupas +, -, fit)
-import ElementDetails from './ElementDetails';
+import TankDetailsDrawer from './TankDetailsDrawer';
 import useTanques from '../../hooks/useTanques';
 import Tooltip from '@mui/material/Tooltip';
 import EditIcon from '@mui/icons-material/Edit';
@@ -37,6 +37,31 @@ const COLOR_PRESETS = [
   { label: 'Morado', value: '#8b5cf6' },
   { label: 'Gris', value: '#64748b' },
 ];
+
+const TANK_HISTORY_STORAGE_KEY = 'district_tank_level_history_v1';
+
+const getTankHistoryIdentity = (tank = {}) => String(
+  tank.tag || tank.apiTag || tank.originalName || tank.id || tank.display_name || tank.nombre || ''
+).trim();
+
+const normalizeTankHistoryStatus = (tank = {}) => {
+  const raw = String(tank.calidad || tank.estado || tank.status || '').trim().toUpperCase();
+  if (raw.includes('DUDOSA')) return 'DUDOSA';
+  if (raw.includes('CRIT')) return 'CRITICO';
+  if (raw.includes('SIN') && raw.includes('DATO')) return 'SIN DATOS';
+  if (raw.includes('OK') || raw.includes('NORMAL')) return 'OK';
+  const level = tank.valor_m ?? tank.nivel ?? null;
+  return level == null || !Number.isFinite(Number(level)) ? 'SIN DATOS' : 'OK';
+};
+
+const readTankHistoryStore = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TANK_HISTORY_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+};
 
 const SHAPE_MENU_OPTIONS = [
   { type: 'rect', label: 'Rectángulo', svg: <rect x="2" y="4" width="20" height="16" rx="3" fill="#bfdbfe" stroke="#3b82f6" strokeWidth="1.5" /> },
@@ -106,6 +131,7 @@ export default function DistrictMap() {
   // Helper to mark diagram as having unsaved changes
   const triggerUnsaved = () => setUnsavedChanges(true);
   const [errorDismissed, setErrorDismissed] = useState(false);
+  const [tankHistoryVersion, setTankHistoryVersion] = useState(0);
 
   useEffect(() => {
     try {
@@ -130,6 +156,54 @@ export default function DistrictMap() {
 
   const catalog = useMemo(() => loadCatalog(), []);
   const mergedTanques = useMemo(() => mergeApiTanquesWithCatalog(tanques || [], catalog), [tanques, catalog]);
+
+  useEffect(() => {
+    if (!Array.isArray(mergedTanques) || !mergedTanques.length) return;
+
+    try {
+      const store = readTankHistoryStore();
+      const cutoff = Date.now() - (32 * 24 * 60 * 60 * 1000);
+      let changed = false;
+
+      for (const tank of mergedTanques) {
+        const key = getTankHistoryIdentity(tank);
+        if (!key) continue;
+
+        const levelRaw = tank.valor_m ?? tank.nivel ?? null;
+        const level = levelRaw != null && Number.isFinite(Number(levelRaw)) ? Number(levelRaw) : null;
+        const sourceTimestamp = tank.fecha_hora || tank.timestamp || tank.updated_at || null;
+        const sourceTime = sourceTimestamp ? new Date(sourceTimestamp).getTime() : Date.now();
+        const ts = Number.isFinite(sourceTime) ? sourceTime : Date.now();
+        const hourBucket = Math.floor(ts / (60 * 60 * 1000));
+
+        const previous = Array.isArray(store[key]) ? store[key].filter((row) => Number(row?.ts) >= cutoff) : [];
+        const existingIndex = previous.findIndex((row) => Number(row?.bucket) === hourBucket);
+        const sample = {
+          ts,
+          bucket: hourBucket,
+          level,
+          porcentaje: tank.porcentaje_capacidad ?? tank.porcentaje ?? tank.porcentaje_api ?? null,
+          status: normalizeTankHistoryStatus(tank),
+        };
+
+        if (existingIndex >= 0) {
+          previous[existingIndex] = sample;
+        } else {
+          previous.push(sample);
+        }
+
+        store[key] = previous.slice(-800);
+        changed = true;
+      }
+
+      if (changed) {
+        localStorage.setItem(TANK_HISTORY_STORAGE_KEY, JSON.stringify(store));
+        setTankHistoryVersion((value) => value + 1);
+      }
+    } catch (e) {
+      // El historial local nunca debe bloquear ni modificar la telemetría en vivo.
+    }
+  }, [mergedTanques]);
   const ibalConnectionState = useMemo(() => {
     if (loading) return { label: 'Conectando con IBAL...', tone: 'neutral' };
     if (error) return { label: 'IBAL sin conexión', tone: 'error' };
@@ -253,6 +327,44 @@ export default function DistrictMap() {
   const [selectedNode, setSelectedNode] = useState(null);
   // Live reference to the last node object received from DistrictFlow's onNodeSelect callback
   const [selectedFlowNode, setSelectedFlowNode] = useState(null);
+
+  const selectedTankForDetails = useMemo(() => {
+    if (!selectedNode || selectedNode.type !== 'tank') return null;
+    const nd = selectedNode?.data?.nodeData || selectedNode?.data || {};
+    const candidates = [
+      nd.tag,
+      nd.apiName,
+      nd.originalName,
+      nd.display_name,
+      nd.nombre,
+      selectedNode.id,
+      selectedNode.label,
+    ].filter(Boolean).map((value) => String(value).trim().toLowerCase());
+
+    return (mergedTanques || []).find((tank) => {
+      const tankCandidates = [
+        tank.tag,
+        tank.apiName,
+        tank.originalName,
+        tank.display_name,
+        tank.nombre,
+        tank.id,
+      ].filter(Boolean).map((value) => String(value).trim().toLowerCase());
+
+      return candidates.some((candidate) => tankCandidates.includes(candidate));
+    }) || null;
+  }, [selectedNode, mergedTanques]);
+
+  const selectedTankHistory = useMemo(() => {
+    if (!selectedTankForDetails) return [];
+    try {
+      const store = readTankHistoryStore();
+      const key = getTankHistoryIdentity(selectedTankForDetails);
+      return key && Array.isArray(store[key]) ? store[key] : [];
+    } catch (e) {
+      return [];
+    }
+  }, [selectedTankForDetails, tankHistoryVersion]);
 
   const handleNodeSelect = useCallback((id, node, options = {}) => {
     const resolvedId = id || node?.id || flowRef.current?.getSelectedNodeId?.() || null;
@@ -957,7 +1069,9 @@ export default function DistrictMap() {
               Cargando tanques, Mackenfloc y caudales…
             </Box>
           ) : (
-            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onDeleteComplete={() => {
+            <DistrictFlow ref={flowRef} apiError={Boolean(error)} onNodeSelect={handleNodeSelect} onTankDoubleClick={(id, node) => {
+              handleNodeSelect(id, node, { openDetails: true });
+            }} onDeleteComplete={() => {
               setDeleteMode(false);
               setEditTool('select');
               setSelectedEdgeId(null);
@@ -1040,24 +1154,25 @@ export default function DistrictMap() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
 
-      <ElementDetails open={!!selectedNode} onClose={() => { setDetailsDismissedId(selectedNode?.id || selectedId || null); setSelectedNode(null); setSelectedId(null); setShowConnections(false); }} node={selectedNode || null} nodes={nodes} connections={resolvedConnections} onShowConnections={() => {
-        if (!selectedNode) return;
-        setShowConnections(s => !s);
-        centerOn(selectedNode);
-      }} onRenameNode={(nextLabel) => {
-        if (!selectedId) return;
-        if (flowRef.current && typeof flowRef.current.renameSelectedNode === 'function') {
-          flowRef.current.renameSelectedNode(selectedId, nextLabel);
-        }
-      }} onDelete={() => {
-        if (!selectedId) return;
-        if (flowRef.current && typeof flowRef.current.deleteSelectedNode === 'function') {
-          flowRef.current.deleteSelectedNode(selectedId);
+      <TankDetailsDrawer
+        open={Boolean(selectedNode && selectedNode.type === 'tank')}
+        onClose={() => {
+          setDetailsDismissedId(selectedNode?.id || selectedId || null);
           setSelectedNode(null);
-          setSelectedId(null);
           setShowConnections(false);
-        }
-      }} />
+        }}
+        node={selectedNode && selectedNode.type === 'tank' ? selectedNode : null}
+        tank={selectedTankForDetails}
+        history={selectedTankHistory}
+        onRename={(nextLabel) => {
+          if (!selectedId) return;
+          if (flowRef.current && typeof flowRef.current.renameSelectedNode === 'function') {
+            flowRef.current.renameSelectedNode(selectedId, nextLabel);
+            const refreshed = flowRef.current?.getNodeById?.(selectedId) || selectedNode;
+            if (refreshed) setSelectedNode(refreshed);
+          }
+        }}
+      />
     </Box>
   );
 }

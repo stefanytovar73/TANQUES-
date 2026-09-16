@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import tanqueService from "../services/tanqueService";
 
 export default function useTanques() {
-    const [tanques, setTanques] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const initialCached = useMemo(() => tanqueService.peekTanques?.() || null, []);
+    const [tanques, setTanques] = useState(() => initialCached?.tanques || []);
+    const [loading, setLoading] = useState(() => !(initialCached?.tanques?.length));
     const [error, setError] = useState(null);
 
-    // forceRefresh=true fuerza una nueva solicitud a la API ignorando el caché
     const cargarTanques = async (showLoading = false, forceRefresh = false) => {
         if (showLoading) setLoading(true);
 
@@ -15,8 +15,9 @@ export default function useTanques() {
             setTanques(data.tanques || []);
             setError(null);
         } catch (err) {
-            // A real backend/IBAL failure must not be hidden by stale or cached data.
-            setTanques([]);
+            // Si ya había un último dato conocido, conservarlo visible mientras
+            // el siguiente refresco intenta recuperar la conexión con IBAL.
+            setTanques((prev) => Array.isArray(prev) && prev.length ? prev : []);
             setError(err);
         } finally {
             if (showLoading || forceRefresh) setLoading(false);
@@ -24,10 +25,22 @@ export default function useTanques() {
     };
 
     useEffect(() => {
-        // Do not forceRefresh here: rely on telemetry boot to start the central fetch/pending.
-        cargarTanques(true, false);
-        // Sondeo cada 30 s con forceRefresh=true para bypassar el caché
-        const intervalo = window.setInterval(() => cargarTanques(false, true), 30000);
+        // Tanques + captación + PTAP arrancan juntos. Los tres comparten promesas
+        // y caché, por lo que DistrictFlow reutiliza estos mismos resultados.
+        try { tanqueService.preloadDistrictData?.(false); } catch (e) {}
+
+        cargarTanques(!initialCached, false);
+
+        const intervalo = window.setInterval(() => {
+            try {
+                Promise.allSettled([
+                    tanqueService.getCaptacion(true),
+                    tanqueService.getPtap(true),
+                ]);
+            } catch (e) {}
+            cargarTanques(false, true);
+        }, 30000);
+
         return () => clearInterval(intervalo);
     }, []);
 

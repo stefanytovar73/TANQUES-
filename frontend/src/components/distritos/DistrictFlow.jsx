@@ -1981,12 +1981,15 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
     const updated = (edgesRef.current || []).map((e) => e.id === edgeId ? ({ ...e, label: newLabel }) : e);
     setEdges(updated);
     edgesRef.current = updated;
-    try { persistDistrictState(nodesRef.current, updated); } catch (e) {}
     try {
       const raw = readDiagramState();
+      raw.edges = updated;
+      const prevMap = raw.nodes && typeof raw.nodes === 'object' ? raw.nodes : {};
+      raw.nodes = Object.fromEntries((nodesRef.current || []).map((n) => [n.id, getPersistedNodeEntry(n, prevMap[n.id] || {})]));
       writeDiagramState(raw);
+      try { if (typeof onDirtyChanged === 'function') onDirtyChanged(false); } catch (e) {}
     } catch (err) {}
-  }, [selectedEdgeId, readDiagramState, writeDiagramState]);
+  }, [selectedEdgeId, readDiagramState, writeDiagramState, getPersistedNodeEntry, onDirtyChanged]);
 
   const upsertOrToggleConnection = useCallback((sourceId, targetId) => {
     if (!sourceId || !targetId || sourceId === targetId) return;
@@ -2141,15 +2144,16 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         if (existingIds.has(id)) continue;
         const position = sanitizePosition({ x: r.x, y: r.y });
         const nodeData = ensureNodeData({ id, type: r.type, label: r.label, position, data: r });
-        updated.push({ id, type: r.type || 'tank', position, customName: r.customName || '', nameLocked: !!r.nameLocked, label: r.label || id, data: { ...r, customName: r.customName || '', label: r.label || id, nodeData } });
+        updated.push({ id, type: r.type || 'tank', position, draggable: !r.lockedPosition, customName: r.customName || '', nameLocked: !!r.nameLocked, label: r.label || id, data: { ...r, customName: r.customName || '', label: r.label || id, lockedPosition: !!r.lockedPosition, nodeData } });
       }
 
-      const normalizedEdges = (remoteEdges || []).filter(isValidSavedEdge).map((edge) => normalizeSavedEdge(edge, {
+      const normalizedEdgesRaw = (remoteEdges || []).filter(isValidSavedEdge).map((edge) => normalizeSavedEdge(edge, {
         animated: !!showFlow,
         type: 'step',
         markerEnd: { type: MarkerType.ArrowClosed, color: '#000' },
         style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
       })).filter((edge) => edge && edge.source && edge.target);
+      const normalizedEdges = normalizeTankEdgeHandles(normalizedEdgesRaw, updated);
 
       // Update in-memory and UI state
       nodesRef.current = updated;
@@ -2825,13 +2829,14 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
             id,
             type,
             position,
+            draggable: !entry.lockedPosition,
             customName: entry.customName || '',
             label,
-            data: { ...entry, customName: entry.customName || '', label, nodeData },
+            data: { ...entry, customName: entry.customName || '', label, lockedPosition: !!entry.lockedPosition, nodeData },
           };
         }).filter(Boolean);
 
-        const savedEdges = (Array.isArray(saved.edges) ? saved.edges : [])
+        const savedEdgesRaw = (Array.isArray(saved.edges) ? saved.edges : [])
           .filter(isValidSavedEdge)
           .map((edge) => normalizeSavedEdge(edge, {
             animated: !!showFlow,
@@ -2840,6 +2845,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
             style: { stroke: '#000', strokeWidth: 5, strokeLinecap: 'round' },
           }))
           .filter((edge) => edge.source && edge.target);
+        const savedEdges = normalizeTankEdgeHandles(savedEdgesRaw, savedNodes);
 
         nodesRef.current = savedNodes;
         edgesRef.current = savedEdges;
@@ -2860,6 +2866,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
           data: { nodeData: resolvedData, onSelect: onNodeSelect },
           type: x.type === 'tank' ? 'tank' : (x.type === 'plant' ? 'plant' : (x.type === 'district' ? 'district' : (x.type === 'shape' ? 'shape' : 'tank'))),
           position: x.position,
+          draggable: true,
         };
       });
       const e = (initialEdges || []).map(x => {
@@ -2869,7 +2876,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
       }).filter(ed => ed.source && ed.target);
 
       const rfNodes = n.map(nd => ({ id: nd.id, type: nd.type, position: nd.position || null, data: nd.data }));
-      const rfEdges = e.map(ed => ({ id: ed.id, source: ed.source, target: ed.target, markerEnd: { type: MarkerType.ArrowClosed, color: '#000' }, animated: false, type: 'step', label: ed.label, style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } }));
+      const rfEdgesRaw = e.map(ed => ({ id: ed.id, source: ed.source, target: ed.target, markerEnd: { type: MarkerType.ArrowClosed, color: '#000' }, animated: false, type: 'step', label: ed.label, style: { stroke: '#000', strokeWidth: 3, strokeLinecap: 'round' } }));
 
       const withControls = rfNodes.map(rn => {
         const outer = rn.data || {};
@@ -2877,6 +2884,7 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         const nodeDataWithId = ensureNodeData({ id: rn.id, type: rn.type, label: rn.label, position: rn.position, data: candidate });
         return { ...rn, data: { ...outer, nodeData: nodeDataWithId } };
       });
+      const rfEdges = normalizeTankEdgeHandles(rfEdgesRaw, withControls);
       nodesRef.current = withControls;
       edgesRef.current = rfEdges;
       setNodes(withControls);
@@ -2898,17 +2906,11 @@ const DistrictFlow = React.forwardRef(function DistrictFlow({ initialNodes = [],
         const currentNameLocked = Boolean((currentNd && currentNd.nameLocked) || n.nameLocked || (n.data && n.data.nameLocked));
         const preservedCustomName = currentNameLocked ? currentCustomName : (currentCustomName || String((freshData.customName || '')).trim());
         const nextLabel = preservedCustomName || (freshData.label && String(freshData.label).trim()) || currentNd.label || n.label || freshApiNode.label || n.id;
-        // Calcular porcentaje: fórmula (valor_m / altura_rebose calibrada).
-        // calidad=DUDOSA o sin_datos=true → null (Sin datos). No usar porcentaje_capacidad.
-        const _isBadQuality = freshData.calidad === 'DUDOSA' || freshData.sin_datos === true;
-        let nextPercent = null;
-        if (!_isBadQuality && freshData.valor_m != null && Number.isFinite(Number(freshData.valor_m))) {
-          if (freshData.altura_rebose != null && Number.isFinite(Number(freshData.altura_rebose)) && Number(freshData.altura_rebose) > 0) {
-            const _rawPct = (Number(freshData.valor_m) / Number(freshData.altura_rebose)) * 100;
-            if (Number.isFinite(_rawPct)) nextPercent = Math.round(Math.max(0, Math.min(100, _rawPct)));
-          }
-        }
-        // Si DUDOSA, valor_m null o sin altura calibrada → Sin datos (null)
+        // freshData ya normaliza el porcentaje autoritativo de IBAL. Si la API
+        // envía null, mantener "Sin datos"; no recalcular con alturas locales.
+        const nextPercent = freshData.porcentaje != null && Number.isFinite(Number(freshData.porcentaje))
+          ? Number(freshData.porcentaje)
+          : null;
         const merged = {
           ...currentNd,
           ...freshData,

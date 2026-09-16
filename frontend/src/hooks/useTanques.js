@@ -2,21 +2,25 @@ import { useEffect, useMemo, useState } from "react";
 import tanqueService from "../services/tanqueService";
 
 export default function useTanques() {
-    const initialCached = useMemo(() => tanqueService.peekTanques?.() || null, []);
-    const [tanques, setTanques] = useState(() => initialCached?.tanques || []);
-    const [loading, setLoading] = useState(() => !(initialCached?.tanques?.length));
+    // Solo mostrar el conjunto cacheado si ya existen LAS TRES fuentes.
+    // Así nunca aparecen primero los tanques y segundos después Macken/caudales.
+    const initialBundle = useMemo(() => tanqueService.peekDistrictData?.() || null, []);
+    const initialTanques = initialBundle?.tanques?.tanques || [];
+
+    const [tanques, setTanques] = useState(() => initialTanques);
+    const [loading, setLoading] = useState(() => !initialTanques.length);
     const [error, setError] = useState(null);
 
-    const cargarTanques = async (showLoading = false, forceRefresh = false) => {
+    const cargarTodoDistritos = async (showLoading = false, forceRefresh = false) => {
         if (showLoading) setLoading(true);
 
         try {
-            const data = await tanqueService.getTanques(forceRefresh);
-            setTanques(data.tanques || []);
+            const bundle = await tanqueService.getDistrictBootstrap(forceRefresh);
+            const list = bundle?.tanques?.tanques || [];
+            setTanques(list);
             setError(null);
         } catch (err) {
-            // Si ya había un último dato conocido, conservarlo visible mientras
-            // el siguiente refresco intenta recuperar la conexión con IBAL.
+            // Conservar la última pantalla completa si el refresco falla.
             setTanques((prev) => Array.isArray(prev) && prev.length ? prev : []);
             setError(err);
         } finally {
@@ -25,20 +29,12 @@ export default function useTanques() {
     };
 
     useEffect(() => {
-        // Tanques + captación + PTAP arrancan juntos. Los tres comparten promesas
-        // y caché, por lo que DistrictFlow reutiliza estos mismos resultados.
-        try { tanqueService.preloadDistrictData?.(false); } catch (e) {}
-
-        cargarTanques(!initialCached, false);
+        // Una sola carga lógica: el backend trae tanques + captación + PTAP
+        // concurrentemente y la UI se libera cuando las tres ya están listas.
+        cargarTodoDistritos(!initialBundle, false);
 
         const intervalo = window.setInterval(() => {
-            try {
-                Promise.allSettled([
-                    tanqueService.getCaptacion(true),
-                    tanqueService.getPtap(true),
-                ]);
-            } catch (e) {}
-            cargarTanques(false, true);
+            cargarTodoDistritos(false, true);
         }, 30000);
 
         return () => clearInterval(intervalo);
@@ -48,6 +44,6 @@ export default function useTanques() {
         tanques,
         loading,
         error,
-        refresh: () => cargarTanques(true, true),
+        refresh: () => cargarTodoDistritos(true, true),
     };
 }

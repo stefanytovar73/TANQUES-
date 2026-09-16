@@ -10,6 +10,7 @@ export default function useTanques() {
     const [tanques, setTanques] = useState(() => initialTanques);
     const [loading, setLoading] = useState(() => !initialTanques.length);
     const [error, setError] = useState(null);
+    const [telemetryVersion, setTelemetryVersion] = useState(0);
 
     const cargarTodoDistritos = async (showLoading = false, forceRefresh = false) => {
         if (showLoading) setLoading(true);
@@ -18,6 +19,7 @@ export default function useTanques() {
             const bundle = await tanqueService.getDistrictBootstrap(forceRefresh);
             const list = bundle?.tanques?.tanques || [];
             setTanques(list);
+            setTelemetryVersion((value) => value + 1);
             setError(null);
         } catch (err) {
             // Conservar la última pantalla completa si el refresco falla.
@@ -45,5 +47,6 @@ export default function useTanques() {
         loading,
         error,
         refresh: () => cargarTodoDistritos(true, true),
+        telemetryVersion,
     };
 }

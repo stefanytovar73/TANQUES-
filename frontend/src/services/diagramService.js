@@ -1,11 +1,11 @@
 import api from '../api/axios';
 
-// IMPORTANTE: estos ajustes NO deben cambiar type, handles, routeMode ni la forma
-// de ninguna conexión. El único cambio de layout permitido aquí es acercar
-// "Filtros Nuevos". Si el arreglo anterior alcanzó a convertir conexiones a
-// Smart, intentamos restaurarlas desde el backup local que ya conserva DistrictFlow.
-const FILTERS_SPACING_MIGRATION_KEY = 'district_filters_nuevos_spacing_v4_only';
-const CONNECTION_RESTORE_KEY = 'district_restore_connections_after_v3_v1';
+// Este servicio NO debe cambiar la forma de las conexiones.
+// Si un arreglo anterior convirtió líneas rectas/manuales a Smart, se recuperan
+// desde district_state_backup. Después de eso, solo se permite acercar
+// "Filtros Nuevos"; nunca se alteran type, handles, routeMode ni estilos.
+const FILTERS_SPACING_MIGRATION_KEY = 'district_filters_nuevos_spacing_v5_only';
+const CONNECTION_RESTORE_KEY = 'district_restore_connections_after_v3_v2_full';
 const BAD_LAYOUT_FIX_KEY = 'district_camera_filters_layout_v3';
 
 const normalizeName = (value) => String(value ?? '')
@@ -98,9 +98,7 @@ const setLocalFlag = (key) => {
 
 const restoreConnectionsFromBackup = (inputState) => {
   const state = inputState && typeof inputState === 'object' ? inputState : {};
-
-  // Solo ejecutar esta recuperación si fue aplicado el arreglo que dañó rutas.
-  if (!hasLocalFlag(BAD_LAYOUT_FIX_KEY) || hasLocalFlag(CONNECTION_RESTORE_KEY)) {
+  if (hasLocalFlag(CONNECTION_RESTORE_KEY)) {
     return { state, changed: false, handled: false };
   }
 
@@ -108,6 +106,17 @@ const restoreConnectionsFromBackup = (inputState) => {
   const backupEdges = Array.isArray(backup?.edges) ? backup.edges : [];
   const currentEdges = Array.isArray(state.edges) ? state.edges : [];
   if (!backupEdges.length || !currentEdges.length) {
+    return { state, changed: false, handled: false };
+  }
+
+  const looksLikeBadFix = currentEdges.some((edge) => (
+    edge?.type === 'smart'
+    && edge?.data?.routeMode === 'smart'
+    && edge?.data?.manualPorts === false
+    && edge?.data?.autoPorts === true
+  ));
+
+  if (!hasLocalFlag(BAD_LAYOUT_FIX_KEY) && !looksLikeBadFix) {
     return { state, changed: false, handled: false };
   }
 
@@ -119,24 +128,15 @@ const restoreConnectionsFromBackup = (inputState) => {
     backupByKey.set(getEdgeLookupKey(edge), edge);
   }
 
+  let matched = 0;
   let changed = false;
   const restoredEdges = currentEdges.map((edge) => {
     if (!edge || typeof edge !== 'object') return edge;
-
-    // Firma exacta que dejó el arreglo anterior al forzar una conexión a Smart.
-    const wasForcedByBadFix = edge.type === 'smart'
-      && edge.data?.routeMode === 'smart'
-      && edge.data?.manualPorts === false
-      && edge.data?.autoPorts === true;
-
-    if (!wasForcedByBadFix) return edge;
-
     const backupEdge = (edge.id != null ? backupById.get(String(edge.id)) : null)
       || backupByKey.get(getEdgeLookupKey(edge));
     if (!backupEdge) return edge;
 
-    // Si el backup es distinto, devolver la conexión COMPLETA: tipo, handles,
-    // estilo, etiqueta y cualquier configuración manual que tuviera el usuario.
+    matched += 1;
     try {
       if (JSON.stringify(backupEdge) !== JSON.stringify(edge)) {
         changed = true;
@@ -145,6 +145,12 @@ const restoreConnectionsFromBackup = (inputState) => {
     } catch {}
     return edge;
   });
+
+  // Evitar aplicar un backup que no corresponde al mismo diagrama.
+  const overlap = matched / Math.max(1, Math.min(currentEdges.length, backupEdges.length));
+  if (overlap < 0.6) {
+    return { state, changed: false, handled: false };
+  }
 
   return {
     state: changed ? { ...state, edges: restoredEdges } : state,
@@ -178,7 +184,6 @@ const applyFiltersSpacingOnly = (inputState) => {
   const edges = Array.isArray(state.edges) ? state.edges : [];
   let neighborId = null;
 
-  // Preferir el elemento al que realmente está conectado Filtros Nuevos.
   const incidentNeighborIds = edges
     .map((edge) => {
       const { source, target } = getEdgeEndpoints(edge || {});
@@ -221,11 +226,9 @@ const applyFiltersSpacingOnly = (inputState) => {
   const uy = dy / distance;
   const filtersRadius = Math.abs(ux) * filtersCenter.width / 2 + Math.abs(uy) * filtersCenter.height / 2;
   const neighborRadius = Math.abs(ux) * neighborCenter.width / 2 + Math.abs(uy) * neighborCenter.height / 2;
-
-  // Separación corta, similar al resto. Solo se mueve Filtros Nuevos; ninguna
-  // conexión es recalculada, convertida ni reanclada.
   const desiredGap = 28;
   const desiredDistance = filtersRadius + neighborRadius + desiredGap;
+
   if (distance <= desiredDistance + 20) {
     return { state, changed: false, handled: true };
   }
@@ -288,8 +291,6 @@ const diagramService = {
       }
     } catch {}
 
-    // Persistimos exactamente el estado recuperado/movido. No se toca ninguna
-    // otra conexión ni se recalcula su geometría.
     api.post('diagram/state', nextState)
       .then(() => {
         if (restoreHandled) setLocalFlag(CONNECTION_RESTORE_KEY);

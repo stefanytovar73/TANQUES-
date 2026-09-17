@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { calculateDisplayPorcentaje } from '../../config/tankCatalog';
+import TankHistoryPanel from './TankHistoryPanel';
 
 export default function TankNode({ data, selected }) {
   const cx = 60;
@@ -76,6 +78,7 @@ export default function TankNode({ data, selected }) {
 
   const [editingPct, setEditingPct] = useState(false);
   const [draftPct, setDraftPct] = useState(porcentaje != null ? String(Math.round(porcentaje)) : '');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const inputRef = useRef(null);
 
   // mark TankNode update for profiling (useEffect to run after paint)
@@ -90,111 +93,127 @@ export default function TankNode({ data, selected }) {
   const waterH = fillRatio != null ? (bH - 8) * fillRatio : 0;
   const waterY = by + bH - 4 - waterH;
 
+  const openHistory = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setEditingPct(false);
+    setHistoryOpen(true);
+  };
+
   return (
-    <g>
-      {/* ── badge nivel ENCIMA ── */}
-      <rect
-        x={cx - 46} y={-2} width={92} height={30}
-        rx={6}
-        fill="#ffffff"
-        stroke="#94a3b8"
-        strokeWidth={1.2}
-        style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.18))' }}
-      />
-      <text
-        x={cx} y={14}
-        fontFamily="Roboto, Arial, sans-serif"
-        fontSize={16} fontWeight={900}
-        fill="#0b2447"
-        textAnchor="middle" dominantBaseline="middle"
-      >
-        {valorM != null ? `${Number(valorM).toFixed(2)} m` : 'Sin datos'}
-      </text>
-
-      {/* ── cuerpo del tanque ── */}
-
-      {/* tapa superior */}
-      <ellipse cx={cx} cy={by} rx={bW / 2} ry={9} fill={fillLight} stroke={stroke} strokeWidth={1.2} />
-
-      {/* fondo claro */}
-      <rect x={bx} y={by} width={bW} height={bH} fill={fillLight} stroke="none" />
-
-      {/* agua desde abajo */}
-      {waterH > 0 && (
-        <>
-          <rect x={bx + 1} y={waterY} width={bW - 2} height={waterH} fill={fillWater} />
-          <ellipse cx={cx} cy={waterY} rx={(bW - 2) / 2} ry={6} fill={fillWater} />
-        </>
-      )}
-
-      {/* contorno encima */}
-      <rect x={bx} y={by} width={bW} height={bH} fill="none" stroke={stroke} strokeWidth={selected ? 2.5 : 1.2} />
-
-      {/* tapa inferior */}
-      <ellipse cx={cx} cy={by + bH} rx={bW / 2} ry={9} fill={fillWater} stroke={stroke} strokeWidth={1.2} />
-
-      {/* porcentaje en NEGRO */}
-      {porcentaje != null ? (
+    <>
+      <g onDoubleClick={openHistory} style={{ cursor: 'pointer' }}>
+        {/* ── badge nivel ENCIMA ── */}
+        <rect
+          x={cx - 46} y={-2} width={92} height={30}
+          rx={6}
+          fill="#ffffff"
+          stroke="#94a3b8"
+          strokeWidth={1.2}
+          style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.18))' }}
+        />
         <text
-          x={cx} y={by + bH / 2 + 4}
-          fontSize={20} fontWeight={900}
+          x={cx} y={14}
+          fontFamily="Roboto, Arial, sans-serif"
+          fontSize={16} fontWeight={900}
+          fill="#0b2447"
           textAnchor="middle" dominantBaseline="middle"
-          fill="#111827"
-          style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-          onClick={(e) => { e.stopPropagation(); setDraftPct(porcentaje != null ? String(Math.round(porcentaje)) : ''); setEditingPct(true); }}
         >
-          {`${Math.round(porcentaje)}%`}
+          {valorM != null ? `${Number(valorM).toFixed(2)} m` : 'Sin datos'}
         </text>
-      ) : (
-        <text
-          x={cx} y={by + bH / 2 + 4}
-          fontSize={15} fontWeight={800}
-          textAnchor="middle" dominantBaseline="middle"
-          fill="#1d4ed8"
-          style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-          onClick={(e) => { e.stopPropagation(); setEditingPct(true); }}
-        >
-          Sin datos
-        </text>
-      )}
 
-      {/* small edit pencil placed inside the tank (top-right), more visible but compact */}
-      <g transform={`translate(${bx + bW - 6}, ${by + 6})`} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setDraftPct(porcentaje != null ? String(Math.round(porcentaje)) : ''); setEditingPct(true); }}>
-        <filter id="drop" x="-50%" y="-50%" width="200%" height="200%">
-          <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity="0.12" />
-        </filter>
-        <circle cx={0} cy={0} r={6} fill="#1e40af" stroke="#ffffff" strokeWidth={1.2} style={{ filter: 'url(#drop)' }} />
-        <text x={0} y={4} fontSize={9} fontWeight={800} textAnchor="middle" fill="#ffffff">✎</text>
+        {/* ── cuerpo del tanque ── */}
+
+        {/* tapa superior */}
+        <ellipse cx={cx} cy={by} rx={bW / 2} ry={9} fill={fillLight} stroke={stroke} strokeWidth={1.2} />
+
+        {/* fondo claro */}
+        <rect x={bx} y={by} width={bW} height={bH} fill={fillLight} stroke="none" />
+
+        {/* agua desde abajo */}
+        {waterH > 0 && (
+          <>
+            <rect x={bx + 1} y={waterY} width={bW - 2} height={waterH} fill={fillWater} />
+            <ellipse cx={cx} cy={waterY} rx={(bW - 2) / 2} ry={6} fill={fillWater} />
+          </>
+        )}
+
+        {/* contorno encima */}
+        <rect x={bx} y={by} width={bW} height={bH} fill="none" stroke={stroke} strokeWidth={selected ? 2.5 : 1.2} />
+
+        {/* tapa inferior */}
+        <ellipse cx={cx} cy={by + bH} rx={bW / 2} ry={9} fill={fillWater} stroke={stroke} strokeWidth={1.2} />
+
+        {/* porcentaje en NEGRO */}
+        {porcentaje != null ? (
+          <text
+            x={cx} y={by + bH / 2 + 4}
+            fontSize={20} fontWeight={900}
+            textAnchor="middle" dominantBaseline="middle"
+            fill="#111827"
+            style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+            onClick={(e) => { e.stopPropagation(); setDraftPct(porcentaje != null ? String(Math.round(porcentaje)) : ''); setEditingPct(true); }}
+          >
+            {`${Math.round(porcentaje)}%`}
+          </text>
+        ) : (
+          <text
+            x={cx} y={by + bH / 2 + 4}
+            fontSize={15} fontWeight={800}
+            textAnchor="middle" dominantBaseline="middle"
+            fill="#1d4ed8"
+            style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+            onClick={(e) => { e.stopPropagation(); setEditingPct(true); }}
+          >
+            Sin datos
+          </text>
+        )}
+
+        {/* small edit pencil placed inside the tank (top-right), more visible but compact */}
+        <g transform={`translate(${bx + bW - 6}, ${by + 6})`} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setDraftPct(porcentaje != null ? String(Math.round(porcentaje)) : ''); setEditingPct(true); }}>
+          <filter id="drop" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity="0.12" />
+          </filter>
+          <circle cx={0} cy={0} r={6} fill="#1e40af" stroke="#ffffff" strokeWidth={1.2} style={{ filter: 'url(#drop)' }} />
+          <text x={0} y={4} fontSize={9} fontWeight={800} textAnchor="middle" fill="#ffffff">✎</text>
+        </g>
+
+        {/* manual badge removed: edit applies to the central percentage only */}
+
+        {editingPct && (
+          <foreignObject x={cx - 36} y={by + bH / 2 - 18} width={72} height={36} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.95)', borderRadius: 6, padding: 4, border: '1px solid #cbd5e1' }}>
+              <input
+                ref={inputRef}
+                value={draftPct}
+                onChange={(e) => setDraftPct(e.target.value)}
+                onKeyDown={(ev) => {
+                  if (ev.key === 'Enter') {
+                    ev.preventDefault(); ev.stopPropagation();
+                    const v = parseFloat(String(draftPct).replace(',', '.'));
+                    const parsed = Number.isFinite(Number(v)) ? Number(v) : null;
+                    try { if (typeof data.onManualPctChange === 'function') data.onManualPctChange(parsed); } catch (e) {}
+                    setEditingPct(false);
+                  }
+                  if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); setEditingPct(false); }
+                }}
+                style={{ width: 40, border: '1px solid #cbd5e1', borderRadius: 4, padding: '2px 4px', textAlign: 'center' }}
+              />
+              <button type="button" onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); const v = parseFloat(String(draftPct).replace(',', '.')); const parsed = Number.isFinite(Number(v)) ? Number(v) : null; try { if (typeof data.onManualPctChange === 'function') data.onManualPctChange(parsed); } catch (e) {} setEditingPct(false); }} style={{ border: 'none', background: '#10b981', color: '#fff', borderRadius: 4, padding: '4px 6px' }}>OK</button>
+              <button type="button" onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); setDraftPct(porcentaje != null ? String(Math.round(porcentaje)) : ''); setEditingPct(false); }} style={{ border: 'none', background: '#ef4444', color: '#fff', borderRadius: 4, padding: '4px 6px' }}>✕</button>
+            </div>
+          </foreignObject>
+        )}
+
+        {/* el nombre lo renderiza DistrictFlow — NO duplicar aquí */}
       </g>
 
-      {/* manual badge removed: edit applies to the central percentage only */}
-
-      {editingPct && (
-        <foreignObject x={cx - 36} y={by + bH / 2 - 18} width={72} height={36} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.95)', borderRadius: 6, padding: 4, border: '1px solid #cbd5e1' }}>
-            <input
-              ref={inputRef}
-              value={draftPct}
-              onChange={(e) => setDraftPct(e.target.value)}
-              onKeyDown={(ev) => {
-                if (ev.key === 'Enter') {
-                  ev.preventDefault(); ev.stopPropagation();
-                  const v = parseFloat(String(draftPct).replace(',', '.'));
-                  const parsed = Number.isFinite(Number(v)) ? Number(v) : null;
-                  try { if (typeof data.onManualPctChange === 'function') data.onManualPctChange(parsed); } catch (e) {}
-                  setEditingPct(false);
-                }
-                if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); setEditingPct(false); }
-              }}
-              style={{ width: 40, border: '1px solid #cbd5e1', borderRadius: 4, padding: '2px 4px', textAlign: 'center' }}
-            />
-            <button type="button" onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); const v = parseFloat(String(draftPct).replace(',', '.')); const parsed = Number.isFinite(Number(v)) ? Number(v) : null; try { if (typeof data.onManualPctChange === 'function') data.onManualPctChange(parsed); } catch (e) {} setEditingPct(false); }} style={{ border: 'none', background: '#10b981', color: '#fff', borderRadius: 4, padding: '4px 6px' }}>OK</button>
-            <button type="button" onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); setDraftPct(porcentaje != null ? String(Math.round(porcentaje)) : ''); setEditingPct(false); }} style={{ border: 'none', background: '#ef4444', color: '#fff', borderRadius: 4, padding: '4px 6px' }}>✕</button>
-          </div>
-        </foreignObject>
-      )}
-
-      {/* el nombre lo renderiza DistrictFlow — NO duplicar aquí */}
-    </g>
+      {historyOpen && typeof document !== 'undefined'
+        ? createPortal(
+            <TankHistoryPanel tank={metricSource} onClose={() => setHistoryOpen(false)} />,
+            document.body
+          )
+        : null}
+    </>
   );
 }

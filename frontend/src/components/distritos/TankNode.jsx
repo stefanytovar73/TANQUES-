@@ -1,6 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
+import TankHistoryPanel from './TankHistoryPanel';
 
 export default function TankNode({ data, selected }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const cx = 60;
   const bW = 80;
   const bH = 90;
@@ -17,71 +20,86 @@ export default function TankNode({ data, selected }) {
   const waterH = fillRatio != null ? (bH - 8) * fillRatio : 0;
   const waterY = by + bH - 4 - waterH;
 
+  const openHistory = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setHistoryOpen(true);
+  };
+
   return (
-    <g>
-      {/* ── badge nivel ENCIMA ── */}
-      <rect
-        x={cx - 46} y={-2} width={92} height={30}
-        rx={6}
-        fill="#ffffff"
-        stroke="#94a3b8"
-        strokeWidth={1.2}
-        style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.18))' }}
-      />
-      <text
-        x={cx} y={14}
-        fontFamily="Roboto, Arial, sans-serif"
-        fontSize={16} fontWeight={900}
-        fill="#0b2447"
-        textAnchor="middle" dominantBaseline="middle"
-      >
-        {data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'Sin datos'}
-      </text>
-
-      {/* ── cuerpo del tanque ── */}
-
-      {/* tapa superior */}
-      <ellipse cx={cx} cy={by} rx={bW / 2} ry={9} fill={fillLight} stroke={stroke} strokeWidth={1.2} />
-
-      {/* fondo claro */}
-      <rect x={bx} y={by} width={bW} height={bH} fill={fillLight} stroke="none" />
-
-      {/* agua desde abajo */}
-      {waterH > 0 && (
-        <>
-          <rect x={bx + 1} y={waterY} width={bW - 2} height={waterH} fill={fillWater} />
-          <ellipse cx={cx} cy={waterY} rx={(bW - 2) / 2} ry={6} fill={fillWater} />
-        </>
-      )}
-
-      {/* contorno encima */}
-      <rect x={bx} y={by} width={bW} height={bH} fill="none" stroke={stroke} strokeWidth={selected ? 2.5 : 1.2} />
-
-      {/* tapa inferior */}
-      <ellipse cx={cx} cy={by + bH} rx={bW / 2} ry={9} fill={fillWater} stroke={stroke} strokeWidth={1.2} />
-
-      {/* porcentaje en NEGRO */}
-      {porcentaje != null ? (
+    <>
+      <g onDoubleClick={openHistory} style={{ cursor: 'pointer' }}>
+        {/* ── badge nivel ENCIMA ── */}
+        <rect
+          x={cx - 46} y={-2} width={92} height={30}
+          rx={6}
+          fill="#ffffff"
+          stroke="#94a3b8"
+          strokeWidth={1.2}
+          style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.18))' }}
+        />
         <text
-          x={cx} y={by + bH / 2 + 4}
-          fontSize={20} fontWeight={900}
+          x={cx} y={14}
+          fontFamily="Roboto, Arial, sans-serif"
+          fontSize={16} fontWeight={900}
+          fill="#0b2447"
           textAnchor="middle" dominantBaseline="middle"
-          fill="#111827"
         >
-          {`${Math.round(porcentaje)}%`}
+          {data.valor_m != null ? `${Number(data.valor_m).toFixed(2)} m` : 'Sin datos'}
         </text>
-      ) : (
-        <text
-          x={cx} y={by + bH / 2 + 4}
-          fontSize={15} fontWeight={800}
-          textAnchor="middle" dominantBaseline="middle"
-          fill="#1d4ed8"
-        >
-          Sin datos
-        </text>
-      )}
 
-      {/* el nombre lo renderiza DistrictFlow — NO duplicar aquí */}
-    </g>
+        {/* ── cuerpo del tanque ── */}
+
+        {/* tapa superior */}
+        <ellipse cx={cx} cy={by} rx={bW / 2} ry={9} fill={fillLight} stroke={stroke} strokeWidth={1.2} />
+
+        {/* fondo claro */}
+        <rect x={bx} y={by} width={bW} height={bH} fill={fillLight} stroke="none" />
+
+        {/* agua desde abajo */}
+        {waterH > 0 && (
+          <>
+            <rect x={bx + 1} y={waterY} width={bW - 2} height={waterH} fill={fillWater} />
+            <ellipse cx={cx} cy={waterY} rx={(bW - 2) / 2} ry={6} fill={fillWater} />
+          </>
+        )}
+
+        {/* contorno encima */}
+        <rect x={bx} y={by} width={bW} height={bH} fill="none" stroke={stroke} strokeWidth={selected ? 2.5 : 1.2} />
+
+        {/* tapa inferior */}
+        <ellipse cx={cx} cy={by + bH} rx={bW / 2} ry={9} fill={fillWater} stroke={stroke} strokeWidth={1.2} />
+
+        {/* porcentaje en NEGRO */}
+        {porcentaje != null ? (
+          <text
+            x={cx} y={by + bH / 2 + 4}
+            fontSize={20} fontWeight={900}
+            textAnchor="middle" dominantBaseline="middle"
+            fill="#111827"
+          >
+            {`${Math.round(porcentaje)}%`}
+          </text>
+        ) : (
+          <text
+            x={cx} y={by + bH / 2 + 4}
+            fontSize={15} fontWeight={800}
+            textAnchor="middle" dominantBaseline="middle"
+            fill="#1d4ed8"
+          >
+            Sin datos
+          </text>
+        )}
+
+        {/* el nombre lo renderiza DistrictFlow — NO duplicar aquí */}
+      </g>
+
+      {historyOpen && typeof document !== 'undefined'
+        ? createPortal(
+            <TankHistoryPanel tank={data || {}} onClose={() => setHistoryOpen(false)} />,
+            document.body
+          )
+        : null}
+    </>
   );
 }

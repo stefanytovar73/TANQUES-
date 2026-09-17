@@ -129,21 +129,35 @@ const peekMetric = (kind, freshKey, lastKey) => {
 // PTAP ha llegado con dos formas distintas según el entorno: `variables` en
 // la raíz o dentro de `ptap`. DistrictFlow consume `variables`, así que aquí
 // normalizamos la respuesta una sola vez. CAY debe mostrar 0 L/s cuando el tag
-// no venga en la API, pero nunca reemplazamos un valor real (incluido 0).
+// no venga o venga sin valor, pero nunca reemplazamos una lectura real.
 const normalizePtapPayload = (payload) => {
   const source = payload && typeof payload === 'object' ? payload : {};
   const nestedPtap = source.ptap && typeof source.ptap === 'object' && !Array.isArray(source.ptap)
     ? source.ptap
     : null;
 
-  const variables = Array.isArray(source.variables)
-    ? [...source.variables]
+  const sourceVariables = Array.isArray(source.variables)
+    ? source.variables
     : (Array.isArray(source.ptap)
-      ? [...source.ptap]
-      : (Array.isArray(nestedPtap?.variables) ? [...nestedPtap.variables] : []));
+      ? source.ptap
+      : (Array.isArray(nestedPtap?.variables) ? nestedPtap.variables : []));
 
   const cayTag = 'PTAP_CAUDAL_CAY_16';
-  const hasCay = variables.some((variable) => variable && String(variable.tag) === cayTag);
+  let hasCay = false;
+  const variables = sourceVariables.map((variable) => {
+    if (!variable || String(variable.tag) !== cayTag) return variable;
+    hasCay = true;
+
+    const raw = variable.valor;
+    const isEmpty = raw === null
+      || raw === undefined
+      || String(raw).trim() === ''
+      || /^[.•\s]+$/.test(String(raw));
+
+    return isEmpty
+      ? { ...variable, valor: 0, unidad: variable.unidad || 'L/s', __fallback: true }
+      : variable;
+  });
 
   if (!hasCay) {
     variables.push({

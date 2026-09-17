@@ -1,4 +1,5 @@
 import api from "../api/axios";
+import { recordTankHistoryPayload } from "../utils/tankHistoryStore";
 
 let cache = null;
 let cacheExpiresAt = 0;
@@ -125,6 +126,41 @@ const peekMetric = (kind, freshKey, lastKey) => {
   return readFreshSession(freshKey) || readLastKnown(lastKey);
 };
 
+// PTAP ha llegado con dos formas distintas según el entorno: `variables` en
+// la raíz o dentro de `ptap`. DistrictFlow consume `variables`, así que aquí
+// normalizamos la respuesta una sola vez. CAY debe mostrar 0 L/s cuando el tag
+// no venga en la API, pero nunca reemplazamos un valor real (incluido 0).
+const normalizePtapPayload = (payload) => {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const nestedPtap = source.ptap && typeof source.ptap === 'object' && !Array.isArray(source.ptap)
+    ? source.ptap
+    : null;
+
+  const variables = Array.isArray(source.variables)
+    ? [...source.variables]
+    : (Array.isArray(source.ptap)
+      ? [...source.ptap]
+      : (Array.isArray(nestedPtap?.variables) ? [...nestedPtap.variables] : []));
+
+  const cayTag = 'PTAP_CAUDAL_CAY_16';
+  const hasCay = variables.some((variable) => variable && String(variable.tag) === cayTag);
+
+  if (!hasCay) {
+    variables.push({
+      tag: cayTag,
+      display_name: 'CAY',
+      valor: 0,
+      unidad: 'L/s',
+      __fallback: true,
+    });
+  }
+
+  return {
+    ...source,
+    variables,
+  };
+};
+
 const tanqueService = {
   getTanques: async (forceRefresh = false) => {
     const now = Date.now();
@@ -152,6 +188,7 @@ const tanqueService = {
         cacheExpiresAt = Date.now() + CACHE_TTL_MS;
         writeStored(sessionStorage, STORAGE_KEYS.tanquesFresh, cache, cacheExpiresAt);
         writeStored(localStorage, STORAGE_KEYS.tanquesLast, cache);
+        try { recordTankHistoryPayload(cache); } catch {}
         return cache;
       })
       .finally(() => {
@@ -181,19 +218,19 @@ const tanqueService = {
     STORAGE_KEYS.captacionLast,
   ),
 
-  getPtap: async (forceRefresh = false) => getMetric({
+  getPtap: async (forceRefresh = false) => normalizePtapPayload(await getMetric({
     kind: 'ptap',
     url: '/caudales/ptap',
     freshKey: STORAGE_KEYS.ptapFresh,
     lastKey: STORAGE_KEYS.ptapLast,
     forceRefresh,
-  }),
+  })),
 
-  peekPtap: () => peekMetric(
+  peekPtap: () => normalizePtapPayload(peekMetric(
     'ptap',
     STORAGE_KEYS.ptapFresh,
     STORAGE_KEYS.ptapLast,
-  ),
+  )),
 
   // Dispara las tres fuentes que usa Distritos al mismo tiempo. Esto evita
   // esperar a que ReactFlow monte cada tarjeta para recién consultar PTAP/captación.

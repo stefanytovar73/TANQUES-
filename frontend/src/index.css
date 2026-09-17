@@ -13,27 +13,3 @@ html, body, #root {
   min-height: 100%;
   background: #f4f7fb;
 }
-
-/*
- * Las conexiones conservan exactamente su ruta, tipo y handles.
- * Solo ocultamos visualmente el tramo que queda detrás de una forma rectangular
- * con texto. El relleno azul semitransparente se sigue pintando encima, por lo
- * que la figura mantiene el mismo aspecto pero la línea ya no se ve atravesándola.
- */
-.react-flow__node-shape > div {
-  isolation: isolate;
-}
-
-.react-flow__node-shape > div:has(> svg g > rect):not(:has(> svg g > ellipse))::before {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  border-radius: 8px;
-  background: #ffffff;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.react-flow__node-shape > div > svg {
-  z-index: 1;
-}

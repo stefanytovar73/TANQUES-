@@ -1,6 +1,12 @@
 import api from '../api/axios';
 
-const LAYOUT_FIX_MIGRATION_KEY = 'district_camera_filters_layout_v3';
+// IMPORTANTE: estos ajustes NO deben cambiar type, handles, routeMode ni la forma
+// de ninguna conexión. El único cambio de layout permitido aquí es acercar
+// "Filtros Nuevos". Si el arreglo anterior alcanzó a convertir conexiones a
+// Smart, intentamos restaurarlas desde el backup local que ya conserva DistrictFlow.
+const FILTERS_SPACING_MIGRATION_KEY = 'district_filters_nuevos_spacing_v4_only';
+const CONNECTION_RESTORE_KEY = 'district_restore_connections_after_v3_v1';
+const BAD_LAYOUT_FIX_KEY = 'district_camera_filters_layout_v3';
 
 const normalizeName = (value) => String(value ?? '')
   .trim()
@@ -54,61 +60,100 @@ const getCenter = (entry = {}) => {
   };
 };
 
-const getRect = (entry = {}, padding = 0) => {
-  const position = getPosition(entry);
-  const size = getSize(entry);
-  return {
-    left: position.x - padding,
-    right: position.x + size.width + padding,
-    top: position.y - padding,
-    bottom: position.y + size.height + padding,
-  };
-};
-
 const getEdgeEndpoints = (edge = {}) => ({
   source: edge.source ?? edge.from ?? edge.sourceId ?? null,
   target: edge.target ?? edge.to ?? edge.targetId ?? null,
 });
 
-const segmentIntersectsRect = (a, b, rect) => {
-  if (!a || !b || !rect) return false;
-
-  const minX = Math.min(a.x, b.x);
-  const maxX = Math.max(a.x, b.x);
-  const minY = Math.min(a.y, b.y);
-  const maxY = Math.max(a.y, b.y);
-  if (maxX < rect.left || minX > rect.right || maxY < rect.top || minY > rect.bottom) return false;
-
-  const inside = (point) => (
-    point.x >= rect.left && point.x <= rect.right
-    && point.y >= rect.top && point.y <= rect.bottom
-  );
-  if (inside(a) || inside(b)) return true;
-
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const hitsVertical = (x) => {
-    if (Math.abs(dx) < 0.000001) return false;
-    const t = (x - a.x) / dx;
-    if (t <= 0 || t >= 1) return false;
-    const y = a.y + (dy * t);
-    return y >= rect.top && y <= rect.bottom;
-  };
-  const hitsHorizontal = (y) => {
-    if (Math.abs(dy) < 0.000001) return false;
-    const t = (y - a.y) / dy;
-    if (t <= 0 || t >= 1) return false;
-    const x = a.x + (dx * t);
-    return x >= rect.left && x <= rect.right;
-  };
-
-  return hitsVertical(rect.left)
-    || hitsVertical(rect.right)
-    || hitsHorizontal(rect.top)
-    || hitsHorizontal(rect.bottom);
+const getEdgeLookupKey = (edge = {}) => {
+  const { source, target } = getEdgeEndpoints(edge);
+  return `${String(source || '')}|${String(target || '')}|${String(edge.label || '')}`;
 };
 
-const applyCameraAndFiltersFix = (inputState) => {
+const readLocalJson = (key) => {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const hasLocalFlag = (key) => {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const setLocalFlag = (key) => {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, '1');
+  } catch {}
+};
+
+const restoreConnectionsFromBackup = (inputState) => {
+  const state = inputState && typeof inputState === 'object' ? inputState : {};
+
+  // Solo ejecutar esta recuperación si fue aplicado el arreglo que dañó rutas.
+  if (!hasLocalFlag(BAD_LAYOUT_FIX_KEY) || hasLocalFlag(CONNECTION_RESTORE_KEY)) {
+    return { state, changed: false, handled: false };
+  }
+
+  const backup = readLocalJson('district_state_backup');
+  const backupEdges = Array.isArray(backup?.edges) ? backup.edges : [];
+  const currentEdges = Array.isArray(state.edges) ? state.edges : [];
+  if (!backupEdges.length || !currentEdges.length) {
+    return { state, changed: false, handled: false };
+  }
+
+  const backupById = new Map();
+  const backupByKey = new Map();
+  for (const edge of backupEdges) {
+    if (!edge || typeof edge !== 'object') continue;
+    if (edge.id != null) backupById.set(String(edge.id), edge);
+    backupByKey.set(getEdgeLookupKey(edge), edge);
+  }
+
+  let changed = false;
+  const restoredEdges = currentEdges.map((edge) => {
+    if (!edge || typeof edge !== 'object') return edge;
+
+    // Firma exacta que dejó el arreglo anterior al forzar una conexión a Smart.
+    const wasForcedByBadFix = edge.type === 'smart'
+      && edge.data?.routeMode === 'smart'
+      && edge.data?.manualPorts === false
+      && edge.data?.autoPorts === true;
+
+    if (!wasForcedByBadFix) return edge;
+
+    const backupEdge = (edge.id != null ? backupById.get(String(edge.id)) : null)
+      || backupByKey.get(getEdgeLookupKey(edge));
+    if (!backupEdge) return edge;
+
+    // Si el backup es distinto, devolver la conexión COMPLETA: tipo, handles,
+    // estilo, etiqueta y cualquier configuración manual que tuviera el usuario.
+    try {
+      if (JSON.stringify(backupEdge) !== JSON.stringify(edge)) {
+        changed = true;
+        return JSON.parse(JSON.stringify(backupEdge));
+      }
+    } catch {}
+    return edge;
+  });
+
+  return {
+    state: changed ? { ...state, edges: restoredEdges } : state,
+    changed,
+    handled: true,
+  };
+};
+
+const applyFiltersSpacingOnly = (inputState) => {
   const state = inputState && typeof inputState === 'object' ? inputState : {};
   const rawNodes = state.nodes;
   const nodeEntries = Array.isArray(rawNodes)
@@ -127,116 +172,72 @@ const applyCameraAndFiltersFix = (inputState) => {
 
   const filters = findNode((name) => name.includes('filtro') && name.includes('nuev'));
   const camera = findNode((name) => name.includes('camara') && name.includes('quiebre'));
-  const protectedNodes = [camera, filters].filter(Boolean);
-  if (!protectedNodes.length) return { state, changed: false, handled: false };
+  if (!filters) return { state, changed: false, handled: false };
 
-  let changed = false;
-  let edges = Array.isArray(state.edges)
-    ? state.edges.map((edge) => edge && typeof edge === 'object' ? { ...edge } : edge)
-    : [];
+  const [filtersId, filtersEntry] = filters;
+  const edges = Array.isArray(state.edges) ? state.edges : [];
+  let neighborId = null;
 
-  // Filtros Nuevos debe quedar a una separación visual parecida al resto del diagrama.
-  // Se conserva la dirección actual y solamente se reduce un hueco excesivo.
-  if (filters) {
-    const [filtersId, filtersEntry] = filters;
-    const incidentNeighborIds = edges
-      .map((edge) => {
-        const { source, target } = getEdgeEndpoints(edge || {});
-        if (source === filtersId) return target;
-        if (target === filtersId) return source;
-        return null;
-      })
-      .filter((id) => id && nodes[id]);
+  // Preferir el elemento al que realmente está conectado Filtros Nuevos.
+  const incidentNeighborIds = edges
+    .map((edge) => {
+      const { source, target } = getEdgeEndpoints(edge || {});
+      if (String(source || '') === filtersId) return String(target || '');
+      if (String(target || '') === filtersId) return String(source || '');
+      return null;
+    })
+    .filter((id) => id && nodes[id]);
 
-    let neighborId = null;
-    if (camera && incidentNeighborIds.includes(camera[0])) {
-      neighborId = camera[0];
-    } else if (incidentNeighborIds.length) {
-      const filtersCenter = getCenter(filtersEntry);
-      neighborId = incidentNeighborIds
-        .slice()
-        .sort((a, b) => {
-          const ca = getCenter(nodes[a]);
-          const cb = getCenter(nodes[b]);
-          return Math.hypot(ca.x - filtersCenter.x, ca.y - filtersCenter.y)
-            - Math.hypot(cb.x - filtersCenter.x, cb.y - filtersCenter.y);
-        })[0];
-    } else if (camera) {
-      neighborId = camera[0];
-    }
-
-    const neighborEntry = neighborId ? nodes[neighborId] : null;
-    if (neighborEntry) {
-      const filtersCenter = getCenter(filtersEntry);
-      const neighborCenter = getCenter(neighborEntry);
-      const dx = filtersCenter.x - neighborCenter.x;
-      const dy = filtersCenter.y - neighborCenter.y;
-      const distance = Math.hypot(dx, dy);
-
-      if (Number.isFinite(distance) && distance > 0) {
-        const ux = dx / distance;
-        const uy = dy / distance;
-        const filtersRadius = Math.abs(ux) * filtersCenter.width / 2 + Math.abs(uy) * filtersCenter.height / 2;
-        const neighborRadius = Math.abs(ux) * neighborCenter.width / 2 + Math.abs(uy) * neighborCenter.height / 2;
-        const desiredGap = 28;
-        const desiredDistance = filtersRadius + neighborRadius + desiredGap;
-
-        if (distance > desiredDistance + 20) {
-          const nextCenterX = neighborCenter.x + (ux * desiredDistance);
-          const nextCenterY = neighborCenter.y + (uy * desiredDistance);
-          const nextX = Math.round((nextCenterX - filtersCenter.width / 2) * 10) / 10;
-          const nextY = Math.round((nextCenterY - filtersCenter.height / 2) * 10) / 10;
-          nodes[filtersId] = setPosition(filtersEntry, nextX, nextY);
-          changed = true;
-        }
-      }
-    }
+  if (camera && incidentNeighborIds.includes(camera[0])) {
+    neighborId = camera[0];
+  } else if (incidentNeighborIds.length) {
+    const filtersCenter = getCenter(filtersEntry);
+    neighborId = incidentNeighborIds
+      .slice()
+      .sort((a, b) => {
+        const ca = getCenter(nodes[a]);
+        const cb = getCenter(nodes[b]);
+        return Math.hypot(ca.x - filtersCenter.x, ca.y - filtersCenter.y)
+          - Math.hypot(cb.x - filtersCenter.x, cb.y - filtersCenter.y);
+      })[0];
+  } else if (camera) {
+    neighborId = camera[0];
   }
 
-  // Las conexiones que tocan o atraviesan Cámara de Quiebre / Filtros Nuevos
-  // siempre usan el enrutador Smart. Los handles existentes se conservan porque
-  // ya están anclados al borde; Smart se encarga de rodear el cuerpo del nodo.
-  edges = edges.map((edge) => {
-    if (!edge || typeof edge !== 'object') return edge;
-    const { source, target } = getEdgeEndpoints(edge);
-    if (!source || !target || !nodes[source] || !nodes[target]) return edge;
+  const neighborEntry = neighborId ? nodes[neighborId] : null;
+  if (!neighborEntry) return { state, changed: false, handled: false };
 
-    const touchesProtected = protectedNodes.some(([id]) => id === source || id === target);
-    const sourceCenter = getCenter(nodes[source]);
-    const targetCenter = getCenter(nodes[target]);
-    const crossesProtected = protectedNodes.some(([id, entry]) => {
-      if (id === source || id === target) return false;
-      return segmentIntersectsRect(sourceCenter, targetCenter, getRect(entry, 10));
-    });
+  const filtersCenter = getCenter(filtersEntry);
+  const neighborCenter = getCenter(neighborEntry);
+  const dx = filtersCenter.x - neighborCenter.x;
+  const dy = filtersCenter.y - neighborCenter.y;
+  const distance = Math.hypot(dx, dy);
 
-    if (!touchesProtected && !crossesProtected) return edge;
+  if (!Number.isFinite(distance) || distance <= 0) {
+    return { state, changed: false, handled: true };
+  }
 
-    const nextData = {
-      ...(edge.data && typeof edge.data === 'object' ? edge.data : {}),
-      routeMode: 'smart',
-      manualPorts: false,
-      autoPorts: true,
-    };
-    const alreadySmart = edge.type === 'smart'
-      && edge.data?.routeMode === 'smart'
-      && edge.data?.manualPorts === false;
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const filtersRadius = Math.abs(ux) * filtersCenter.width / 2 + Math.abs(uy) * filtersCenter.height / 2;
+  const neighborRadius = Math.abs(ux) * neighborCenter.width / 2 + Math.abs(uy) * neighborCenter.height / 2;
 
-    if (alreadySmart) return edge;
-    changed = true;
-    return {
-      ...edge,
-      type: 'smart',
-      data: nextData,
-    };
-  });
+  // Separación corta, similar al resto. Solo se mueve Filtros Nuevos; ninguna
+  // conexión es recalculada, convertida ni reanclada.
+  const desiredGap = 28;
+  const desiredDistance = filtersRadius + neighborRadius + desiredGap;
+  if (distance <= desiredDistance + 20) {
+    return { state, changed: false, handled: true };
+  }
 
-  if (!changed) return { state, changed: false, handled: true };
+  const nextCenterX = neighborCenter.x + (ux * desiredDistance);
+  const nextCenterY = neighborCenter.y + (uy * desiredDistance);
+  const nextX = Math.round((nextCenterX - filtersCenter.width / 2) * 10) / 10;
+  const nextY = Math.round((nextCenterY - filtersCenter.height / 2) * 10) / 10;
+  nodes[filtersId] = setPosition(filtersEntry, nextX, nextY);
 
   const nextNodes = Array.isArray(rawNodes)
-    ? rawNodes.map((entry) => {
-        const id = String(entry?.id || '');
-        return id && nodes[id] ? nodes[id] : entry;
-      })
+    ? rawNodes.map((entry) => String(entry?.id || '') === filtersId ? nodes[filtersId] : entry)
     : nodes;
   const now = new Date().toISOString();
 
@@ -244,7 +245,6 @@ const applyCameraAndFiltersFix = (inputState) => {
     state: {
       ...state,
       nodes: nextNodes,
-      edges,
       updated_at: now,
       _updatedAt: now,
       updatedAt: now,
@@ -254,51 +254,50 @@ const applyCameraAndFiltersFix = (inputState) => {
   };
 };
 
-const hasCompletedLayoutFix = () => {
-  try {
-    return typeof localStorage !== 'undefined'
-      && localStorage.getItem(LAYOUT_FIX_MIGRATION_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
-
-const markLayoutFixComplete = () => {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(LAYOUT_FIX_MIGRATION_KEY, '1');
-    }
-  } catch {}
-};
-
 const diagramService = {
   getState: async () => {
     const res = await api.get('diagram/state');
     const remote = res.data || {};
 
-    if (hasCompletedLayoutFix()) return remote;
+    let nextState = remote;
+    let changed = false;
+    let restoreHandled = false;
+    let spacingHandled = false;
 
-    const migrated = applyCameraAndFiltersFix(remote);
-    if (!migrated.handled) return remote;
+    const restored = restoreConnectionsFromBackup(nextState);
+    nextState = restored.state;
+    changed = changed || restored.changed;
+    restoreHandled = restored.handled;
 
-    if (!migrated.changed) {
-      markLayoutFixComplete();
-      return remote;
+    if (!hasLocalFlag(FILTERS_SPACING_MIGRATION_KEY)) {
+      const spaced = applyFiltersSpacingOnly(nextState);
+      nextState = spaced.state;
+      changed = changed || spaced.changed;
+      spacingHandled = spaced.handled;
+    }
+
+    if (!changed) {
+      if (restoreHandled) setLocalFlag(CONNECTION_RESTORE_KEY);
+      if (spacingHandled) setLocalFlag(FILTERS_SPACING_MIGRATION_KEY);
+      return nextState;
     }
 
     try {
       if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('district_state', JSON.stringify(migrated.state));
+        localStorage.setItem('district_state', JSON.stringify(nextState));
       }
     } catch {}
 
-    // Pintar el estado corregido inmediatamente y persistir la misma corrección
-    // en el backend para que sobreviva recargas y sea compartida entre clientes.
-    api.post('diagram/state', migrated.state)
-      .then(() => markLayoutFixComplete())
+    // Persistimos exactamente el estado recuperado/movido. No se toca ninguna
+    // otra conexión ni se recalcula su geometría.
+    api.post('diagram/state', nextState)
+      .then(() => {
+        if (restoreHandled) setLocalFlag(CONNECTION_RESTORE_KEY);
+        if (spacingHandled) setLocalFlag(FILTERS_SPACING_MIGRATION_KEY);
+      })
       .catch(() => {});
 
-    return migrated.state;
+    return nextState;
   },
 
   saveState: async (state) => {

@@ -194,8 +194,8 @@ const applyCameraAndFiltersFix = (inputState) => {
   }
 
   // Las conexiones que tocan o atraviesan Cámara de Quiebre / Filtros Nuevos
-  // siempre usan el enrutador Smart. Además se liberan handles manuales para que
-  // React Flow elija el borde más cercano en vez de dibujar la línea por dentro.
+  // siempre usan el enrutador Smart. Los handles existentes se conservan porque
+  // ya están anclados al borde; Smart se encarga de rodear el cuerpo del nodo.
   edges = edges.map((edge) => {
     if (!edge || typeof edge !== 'object') return edge;
     const { source, target } = getEdgeEndpoints(edge);
@@ -219,15 +219,12 @@ const applyCameraAndFiltersFix = (inputState) => {
     };
     const alreadySmart = edge.type === 'smart'
       && edge.data?.routeMode === 'smart'
-      && edge.data?.manualPorts === false
-      && !edge.sourceHandle
-      && !edge.targetHandle;
+      && edge.data?.manualPorts === false;
 
     if (alreadySmart) return edge;
     changed = true;
-    const { sourceHandle, targetHandle, ...rest } = edge;
     return {
-      ...rest,
+      ...edge,
       type: 'smart',
       data: nextData,
     };
